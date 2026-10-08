@@ -371,6 +371,7 @@ input:focus,select:focus{outline:none;border-color:var(--gold);background:#fff}
   <button class="tab" onclick="showTab('ricette',event)">📖 Ricette</button>
   <button class="tab" onclick="showTab('magazzino',event)">🏭 Materie Prime</button>
   <button class="tab" onclick="showTab('contrassegni',event)">🏷️ Contrassegni</button>
+  <button class="tab" onclick="showTab('richiesta-con',event)">📋 Richiesta Contrassegni</button>
 </div>
 
 <div class="container">
@@ -511,23 +512,24 @@ input:focus,select:focus{outline:none;border-color:var(--gold);background:#fff}
 <div id="tab-giacenze" class="section">
   <div class="metric-grid" id="metric-cards"></div>
   <div class="filtri-bar no-print">
-    <div><label>Grado alcolico</label>
+    <div><label>Prodotto</label><input type="text" id="filter-prodotto" placeholder="es. Limoncello" oninput="renderGiacenze()" style="width:160px"></div>
+    <div><label>Gradazione</label>
       <select id="filter-grado" style="width:auto" onchange="renderGiacenze()">
-        <option value="">Tutti i gradi</option>
-        <option value="10">10°</option><option value="17">17°</option>
-        <option value="20">20°</option><option value="25">25°</option>
-        <option value="28">28°</option><option value="30">30°</option>
-        <option value="32">32°</option><option value="34">34°</option>
+        <option value="">Tutti</option>
+        <option value="10">10%</option><option value="17">17%</option>
+        <option value="20">20%</option><option value="25">25%</option>
+        <option value="28">28%</option><option value="30">30%</option>
+        <option value="32">32%</option><option value="34">34%</option>
       </select>
     </div>
-    <button class="btn btn-sm" onclick="document.getElementById('filter-grado').value='';renderGiacenze()" style="align-self:flex-end">✕ Reset</button>
+    <button class="btn btn-sm" onclick="document.getElementById('filter-grado').value='';document.getElementById('filter-prodotto').value='';renderGiacenze()" style="align-self:flex-end">✕ Reset</button>
   </div>
   <div class="card">
     <div class="card-header">
       <span class="section-title">Giacenze per prodotto</span>
     </div>
     <div style="overflow-x:auto">
-    <table><thead><tr><th>Prodotto</th><th>°</th><th>0,05L</th><th>0,10L</th><th>0,20L</th><th>0,50L</th><th>0,70L</th><th>1L</th><th>2L</th><th>Totale</th></tr></thead>
+    <table><thead><tr><th>Prodotto</th><th>%</th><th>0,05L</th><th>0,10L</th><th>0,20L</th><th>0,50L</th><th>0,70L</th><th>1L</th><th>2L</th><th>Totale</th></tr></thead>
     <tbody id="tb-giacenze"></tbody></table>
     </div>
   </div>
@@ -540,6 +542,19 @@ input:focus,select:focus{outline:none;border-color:var(--gold);background:#fff}
   <div class="filtri-bar no-print">
     <div><label>N° VIA</label><input type="text" id="f-via" placeholder="es. 12" style="width:80px" oninput="renderLotti()"></div>
     <div><label>Lotto di produzione</label><input type="text" id="f-lotto" placeholder="es. L001" style="width:110px" oninput="renderLotti()"><div style="font-size:10px;color:#9c9890;font-family:'Courier New',Courier,monospace;margin-top:2px">mostra solo VIA con lotto</div></div>
+    <div><label>Prodotto</label><input type="text" id="f-prodotto" placeholder="es. Limoncello" style="width:140px" oninput="renderLotti()"></div>
+    <div><label>Formato</label>
+      <select id="f-formato" style="width:auto" onchange="renderLotti()">
+        <option value="">Tutti</option>
+        <option value="0.05">0,05L</option>
+        <option value="0.10">0,10L</option>
+        <option value="0.20">0,20L</option>
+        <option value="0.50">0,50L</option>
+        <option value="0.70">0,70L</option>
+        <option value="1.00">1L</option>
+        <option value="2.00">2L</option>
+      </select>
+    </div>
     <div><label>Dal</label><input type="date" id="f-data-da" oninput="renderLotti()"></div>
     <div><label>Al</label><input type="date" id="f-data-a" oninput="renderLotti()"></div>
     <div><label>Contrassegno</label><input type="text" id="f-contrassegno" placeholder="es. L0001" oninput="renderLotti()"></div>
@@ -729,8 +744,8 @@ input:focus,select:focus{outline:none;border-color:var(--gold);background:#fff}
   <div id="editor-ricetta" style="display:none" class="card">
     <div class="section-title" style="margin-bottom:1rem" id="editor-title">Nuova ricetta</div>
     <div class="form-row">
-      <div><label>Nome prodotto</label><input type="text" id="r-nome" placeholder="es. Limoncello 30°"></div>
-      <div><label>Grado alcolico (°vol)</label><input type="number" id="r-grado" min="0" max="100" step="0.1" placeholder="es. 30"></div>
+      <div><label>Nome prodotto</label><input type="text" id="r-nome" placeholder="es. Limoncello 30%"></div>
+      <div><label>Gradazione (% vol)</label><input type="number" id="r-grado" min="0" max="100" step="0.1" placeholder="es. 30"></div>
     </div>
     <div style="margin-top:1rem">
       <label style="margin-top:0">Alcol idrato per litro di prodotto</label>
@@ -900,6 +915,112 @@ input:focus,select:focus{outline:none;border-color:var(--gold);background:#fff}
   </div>
 </div>
 
+<!-- RICHIESTA CONTRASSEGNI DI STATO -->
+<div id="tab-richiesta-con" class="section">
+  <div class="card-header">
+    <span class="section-title">📋 Richiesta Contrassegni di Stato</span>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-sm" onclick="rcAggiornaGiacenza()">🔄 Aggiorna giacenza</button>
+      <button class="btn btn-purple no-print" onclick="rcStampaPDF()">🖨️ Genera PDF</button>
+    </div>
+  </div>
+  <p style="font-size:12px;color:#6b6057;margin-bottom:1.25rem;font-family:'Courier New',Courier,monospace;letter-spacing:.04em">Documento ufficiale per la richiesta mensile di contrassegni all'Agenzia delle Dogane. Ogni contrassegno equivale a <strong>formato × 0,22 L anidri</strong>.</p>
+
+  <!-- DATE -->
+  <div class="card">
+    <div class="section-title" style="margin-bottom:1rem;font-size:14px">Date documento</div>
+    <div class="form-row-3">
+      <div><label>Giacenza al (data riferimento)</label><input type="date" id="rc-data-giac" oninput="rcAggiornaTutto()"></div>
+      <div><label>Periodo dal (consumo)</label><input type="date" id="rc-periodo-da" oninput="rcAggiornaTutto()"></div>
+      <div><label>Periodo al (consumo)</label><input type="date" id="rc-periodo-a" oninput="rcAggiornaTutto()"></div>
+    </div>
+    <div style="margin-top:10px">
+      <label>Costo per contrassegno (€)</label>
+      <input type="number" id="rc-costo" value="0.10" min="0" step="0.01" style="width:120px" oninput="rcCalcolaImporto()">
+    </div>
+  </div>
+
+  <!-- GIACENZA ALCOL/CREME/AROMI -->
+  <div class="card">
+    <div class="section-title" style="margin-bottom:1rem;font-size:14px">Giacenza alcool, creme e aromi</div>
+    <p style="font-size:11px;color:#6b6057;font-family:'Courier New',Courier,monospace;margin-bottom:.75rem">Alcol anidro disponibile per contrassegni = Alcol ani. + Creme ani. + Aromi ani. × 10%</p>
+    <div style="overflow-x:auto">
+    <table id="rc-tb-giacenza">
+      <thead><tr>
+        <th>Voce</th>
+        <th>ALCOL Lt. idrici</th><th>ALCOL Lt. anidri</th>
+        <th>CREME Lt. idrici</th><th>CREME Lt. anidri</th>
+        <th>AROMI Lt. idrici</th><th>AROMI Lt. anidri</th>
+      </tr></thead>
+      <tbody id="tb-rc-giac"></tbody>
+    </table>
+    </div>
+    <div style="margin-top:1rem;padding:12px 16px;background:linear-gradient(135deg,#fdf8ee,#fff);border:1px solid var(--gold);border-radius:8px;display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap">
+      <div>
+        <div style="font-family:'Courier New',Courier,monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#6b6057">Litri anidri disponibili</div>
+        <div style="font-family:Georgia,'Times New Roman',serif;font-size:28px;font-weight:500;color:var(--gold)" id="rc-anidri-tot">0,000</div>
+        <div style="font-size:11px;color:#9c9890">Alcol ani. + Creme ani. + Aromi ani.×10%</div>
+      </div>
+      <div>
+        <div style="font-family:'Courier New',Courier,monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#6b6057">Litri anidri rimanenti</div>
+        <div style="font-family:Georgia,'Times New Roman',serif;font-size:28px;font-weight:500" id="rc-anidri-rim" style="color:var(--green)">0,000</div>
+        <div style="font-size:11px;color:#9c9890">Dopo i contrassegni richiesti</div>
+      </div>
+      <div id="rc-ok-badge" style="display:none;padding:8px 16px;border-radius:20px;font-family:'Courier New',Courier,monospace;font-size:12px;font-weight:600;letter-spacing:.06em"></div>
+    </div>
+  </div>
+
+  <!-- COMPOSITORE CONTRASSEGNI -->
+  <div class="card">
+    <div class="section-title" style="margin-bottom:1rem;font-size:14px">Contrassegni da richiedere</div>
+    <p style="font-size:11px;color:#6b6057;font-family:'Courier New',Courier,monospace;margin-bottom:.75rem">GIAC. MEDIA standard: <strong>22</strong> — Ogni contrassegno = formato × 0,22 L anidri. Inserisci le quantità per raggiungere zero litri rimanenti.</p>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr>
+        <th>Tipo</th><th>Formato</th><th>GIAC. MEDIA</th>
+        <th>Quantità richiesta</th>
+        <th>L anidri tot.</th>
+        <th>N° contrassegni × €</th>
+      </tr></thead>
+      <tbody id="tb-rc-composer"></tbody>
+      <tfoot>
+        <tr class="tot-row">
+          <td colspan="3">TOTALE</td>
+          <td id="rc-tot-qt" style="font-family:'Courier New',Courier,monospace">0</td>
+          <td id="rc-tot-ani" style="font-family:'Courier New',Courier,monospace">0,000</td>
+          <td id="rc-tot-importo" style="font-family:'Courier New',Courier,monospace">€ 0,00</td>
+        </tr>
+      </tfoot>
+    </table>
+    </div>
+  </div>
+
+  <!-- CONTRASSEGNI APPLICATI (pagina 2) — auto da VIA -->
+  <div class="card">
+    <div class="section-title" style="margin-bottom:.5rem;font-size:14px">Contrassegni applicati — Serie</div>
+    <p style="font-size:11px;color:#6b6057;font-family:'Courier New',Courier,monospace;margin-bottom:.75rem">Calcolato automaticamente dai VIA di produzione nel periodo selezionato. Puoi correggere manualmente i valori.</p>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr>
+        <th>Serie</th><th>Formato</th><th>Da</th><th>A</th>
+        <th>Lt. idrici</th><th>Lt. anidri</th><th>Gr. media</th>
+        <th class="no-print"></th>
+      </tr></thead>
+      <tbody id="tb-rc-serie"></tbody>
+    </table>
+    </div>
+    <button class="btn btn-sm no-print" style="margin-top:8px" onclick="rcAddSerie()">+ Aggiungi riga manuale</button>
+    <div id="rc-serie-totali" style="margin-top:.75rem;font-family:'Courier New',Courier,monospace;font-size:12px;color:#6b6057"></div>
+  </div>
+
+  <!-- PREVIEW PDF -->
+  <div class="card no-print" id="rc-preview-card" style="display:none">
+    <div class="section-title" style="margin-bottom:1rem;font-size:14px">Anteprima documento</div>
+    <div id="rc-preview-content" style="font-size:12px;line-height:1.6;white-space:pre-wrap;font-family:'Courier New',Courier,monospace;background:var(--cream);padding:1rem;border-radius:6px;border:1px solid var(--cream3)"></div>
+  </div>
+
+</div>
+
 <!-- ANAGRAFICA -->
 <div id="tab-anagrafica" class="section">
   <div class="card-header">
@@ -1009,12 +1130,12 @@ var RICETTE = {
   "Baba 10":          {g:10, alc:0,      aro:[],                                               cre:1.0},
 };
 var NOMI_DISPLAY = {
-  "Crema melone":"Crema Melone","Crema pistacchio":"Crema Pistacchio","Crema cocco":"Crema Cocco",
-  "Crema nocciola":"Crema Nocciola","Crema banana":"Crema Banana","Crema anguria":"Crema Anguria",
-  "Crema cioccolato":"Crema Cioccolato","Crema caffe":"Crema Caffè","Crema limone":"Crema Limone",
-  "Melone 20":"Melone 20°","Liquirizia":"Liquirizia","Melone 25":"Melone 25°","Pera":"Pera 28°",
-  "Limoncello 30":"Limoncello 30°","Rucola":"Rucola","Finocchietto":"Finocchietto","Nocino":"Nocino",
-  "Limoncello 32":"Limoncello 32°","Melanurca":"Melanurca","Amaro":"Amaro","Baba 10":"Babà 10°"
+  "Crema melone":"Crema di Melone 17%","Crema pistacchio":"Crema di Pistacchio 17%","Crema cocco":"Crema di Cocco 17%",
+  "Crema nocciola":"Crema di Nocciola 17%","Crema banana":"Crema di Banana 17%","Crema anguria":"Crema di Anguria 17%",
+  "Crema cioccolato":"Crema di Cioccolato 17%","Crema caffe":"Crema di Caffè 17%","Crema limone":"Crema di Limone 17%",
+  "Melone 20":"Melone 20%","Liquirizia":"Liquirizia 25%","Melone 25":"Melone 25%","Pera":"Pera 28%",
+  "Limoncello 30":"Limoncello 30%","Rucola":"Rucola 30%","Finocchietto":"Finocchietto 30%","Nocino":"Nocino 30%",
+  "Limoncello 32":"Limoncello 32%","Melanurca":"Mela Annurca 34%","Amaro":"Amaro 34%","Baba 10":"Babà 10%"
 };
 var FMT=[0.05,0.10,0.20,0.50,0.70,1.00,2.00];
 var FMT_L=["0,05L","0,10L","0,20L","0,50L","0,70L","1L","2L"];
@@ -1360,17 +1481,19 @@ function renderMetrics(){
 
 function renderGiacenze(){
   var gf=document.getElementById('filter-grado').value;
+  var pf=(document.getElementById('filter-prodotto').value||'').trim().toLowerCase();
   var rows='';
   Object.keys(giacenze).forEach(function(p){
     var g=giacenze[p];
     if(gf&&g.grado!=gf)return;
+    if(pf&&dn(p).toLowerCase().indexOf(pf)<0)return;
     var tot=totBot(p);
     var cells=g.qt.map(function(q){
       if(q<0)return'<td class="qty-neg">'+q+'</td>';
       if(q>0&&q<=5)return'<td class="qty-low">'+q+'</td>';
       return'<td class="qty-num">'+(q||'')+'</td>';
     }).join('');
-    rows+='<tr><td style="font-weight:500">'+dn(p)+'</td><td><span class="badge badge-grado">'+g.grado+'°</span></td>'+cells+'<td style="font-weight:500;font-family:\'Courier New\',Courier,monospace">'+tot+'</td></tr>';
+    rows+='<tr><td style="font-weight:500">'+dn(p)+'</td><td><span class="badge badge-grado">'+g.grado+'%</span></td>'+cells+'<td style="font-weight:500;font-family:\'Courier New\',Courier,monospace">'+tot+'</td></tr>';
   });
   document.getElementById('tb-giacenze').innerHTML=rows||`<tr><td colspan="10" class="empty">Nessun prodotto</td></tr>`;
   renderMetrics();
@@ -1406,15 +1529,18 @@ function calcolaLottoIngr(l){
 }
 
 function resetFiltri(){
-  ['f-via','f-lotto','f-data-da','f-data-a','f-contrassegno'].forEach(function(id){
+  ['f-via','f-lotto','f-prodotto','f-data-da','f-data-a','f-contrassegno'].forEach(function(id){
     document.getElementById(id).value='';
   });
+  document.getElementById('f-formato').value='';
   renderLotti();
 }
 
 function renderLotti(){
   var fVia=(document.getElementById('f-via').value||'').trim().toLowerCase();
   var fLotto=(document.getElementById('f-lotto').value||'').trim().toLowerCase();
+  var fProdotto=(document.getElementById('f-prodotto').value||'').trim().toLowerCase();
+  var fFormato=document.getElementById('f-formato').value;
   var fDaDa=document.getElementById('f-data-da').value;
   var fDaA=document.getElementById('f-data-a').value;
   var fCon=(document.getElementById('f-contrassegno').value||'').trim().toLowerCase();
@@ -1424,11 +1550,13 @@ function renderLotti(){
 
   var filtrati=[].concat(lotti).reverse().map(function(l,ri){ return {l:l, i:lotti.length-1-ri}; });
 
-  if(fVia) filtrati=filtrati.filter(function(x){ return String(x.l.via||'').toLowerCase().includes(fVia); });
-  if(fLotto) filtrati=filtrati.filter(function(x){ return x.l.prodotti.some(function(p){ return (p.lottoP||'').toLowerCase().includes(fLotto); }); });
+  if(fVia) filtrati=filtrati.filter(function(x){ return String(x.l.via||'').toLowerCase().indexOf(fVia)>=0; });
+  if(fLotto) filtrati=filtrati.filter(function(x){ return x.l.prodotti.some(function(p){ return (p.lottoP||'').toLowerCase().indexOf(fLotto)>=0; }); });
+  if(fProdotto) filtrati=filtrati.filter(function(x){ return x.l.prodotti.some(function(p){ return dn(p.nome).toLowerCase().indexOf(fProdotto)>=0; }); });
+  if(fFormato) filtrati=filtrati.filter(function(x){ return x.l.prodotti.some(function(p){ return Math.abs(p.fmt-parseFloat(fFormato))<0.001; }); });
   if(fDaDa) filtrati=filtrati.filter(function(x){ return x.l.data&&x.l.data>=fDaDa; });
   if(fDaA) filtrati=filtrati.filter(function(x){ return x.l.data&&x.l.data<=fDaA; });
-  if(fCon) filtrati=filtrati.filter(function(x){ return x.l.prodotti.some(function(p){ return (p.serieId||'').toLowerCase().includes(fCon); }); });
+  if(fCon) filtrati=filtrati.filter(function(x){ return x.l.prodotti.some(function(p){ return (p.serieId||'').toLowerCase().indexOf(fCon)>=0; }); });
 
   if(!filtrati.length){el.innerHTML='<div class="empty">— Nessun lotto corrisponde ai filtri —</div>';return;}
 
@@ -1878,7 +2006,7 @@ function renderRicette(){
       '<div style="display:flex;justify-content:space-between;align-items:flex-start">'+
         '<div>'+
           '<div class="r-nome">'+dn(nome)+'</div>'+
-          '<div class="r-grado">'+r.g+'° vol'+(isCustom?' · <span style="color:var(--gold)">custom</span>':'')+
+          '<div class="r-grado">'+r.g+'% vol'+(isCustom?' · <span style="color:var(--gold)">custom</span>':'')+
           '</div>'+
         '</div>'+
         '<button class="btn btn-sm btn-edit-ricetta" style="padding:2px 7px;font-size:11px;flex-shrink:0" data-nome="'+nomeEnc+'">✏️</button>'+
@@ -2540,7 +2668,7 @@ function ricalcolaAlcol(){
     var gradoEl=row.querySelector('.ov-grado');
     var totEl=row.querySelector('.ov-tot-ani');
     var grado=lt>0?((alc_ani+cre_ani+aro_ani)/lt*100):0;
-    if(gradoEl){gradoEl.textContent=grado.toFixed(2)+'°';gradoEl.style.color=Math.abs(grado-g)<0.05?'var(--green)':'var(--rose)';}
+    if(gradoEl){gradoEl.textContent=grado.toFixed(2)+'%';gradoEl.style.color=Math.abs(grado-g)<0.05?'var(--green)':'var(--rose)';}
     if(totEl) totEl.textContent=(alc_ani+cre_ani+aro_ani).toFixed(3);
   }
 }
@@ -2569,7 +2697,7 @@ function ricalcolaCrema(){
     var gradoEl=row.querySelector('.ov-grado');
     var totEl=row.querySelector('.ov-tot-ani');
     var grado=lt>0?((alc_ani+cre_ani+aro_ani)/lt*100):0;
-    if(gradoEl){gradoEl.textContent=grado.toFixed(2)+'°';gradoEl.style.color=Math.abs(grado-g)<0.05?'var(--green)':'var(--rose)';}
+    if(gradoEl){gradoEl.textContent=grado.toFixed(2)+'%';gradoEl.style.color=Math.abs(grado-g)<0.05?'var(--green)':'var(--rose)';}
     if(totEl) totEl.textContent=(alc_ani+cre_ani+aro_ani).toFixed(3);
   }
 }
@@ -2701,7 +2829,7 @@ function toggleOverrideRicetta(){
       var gradoSpan=document.createElement('span');
       gradoSpan.className='ov-grado';
       gradoSpan.style.color='var(--green)';
-      gradoSpan.textContent=g+'.00°';
+      gradoSpan.textContent=g+'.00%';
       td4.appendChild(gradoSpan);
       tr.appendChild(td4);
 
@@ -3571,6 +3699,515 @@ function renderContrassegni(){
 }
 
 
+// ===================== RICHIESTA CONTRASSEGNI DI STATO =====================
+
+var RC_SERIE = []; // [{serie:'ACK', fmt:1.00, fmtLabel:'1L', da:1, a:500, ltIdr:0, ltAni:0, grMedia:22, auto:true}]
+var RC_COSTO = 0.10;
+
+var RC_FMT    = [0.05, 0.10, 0.20, 0.50, 0.70, 1.00, 2.00];
+var RC_FMT_L  = ['0,05L','0,10L','0,20L','0,50L','0,70L','1L','2L'];
+var RC_TIPO   = ['A','C','C','C','C','C','C'];
+var RC_GM     = 22; // GIAC. MEDIA standard
+var RC_COEFF  = 0.22; // L anidri per contrassegno = formato × 0,22
+
+function rcInit(){
+  // Imposta date default: oggi come giacenza al, 1° del mese e oggi come periodo
+  var oggi = new Date();
+  var yyyy = oggi.getFullYear();
+  var mm   = String(oggi.getMonth()+1).padStart(2,'0');
+  var dd   = String(oggi.getDate()).padStart(2,'0');
+  var oIso = yyyy+'-'+mm+'-'+dd;
+  var primoMese = yyyy+'-'+mm+'-01';
+  var gEl = document.getElementById('rc-data-giac');
+  var dEl = document.getElementById('rc-periodo-da');
+  var aEl = document.getElementById('rc-periodo-a');
+  if(gEl && !gEl.value) gEl.value = oIso;
+  if(dEl && !dEl.value) dEl.value = primoMese;
+  if(aEl && !aEl.value) aEl.value = oIso;
+  rcBuildComposer();
+  rcAggiornaTutto();
+}
+
+// Calcola le serie usate nel periodo dai VIA di produzione
+function rcCalcolaSerieAutomatiche(){
+  var gDal = document.getElementById('rc-periodo-da') ? document.getElementById('rc-periodo-da').value : '';
+  var gAl  = document.getElementById('rc-periodo-a')  ? document.getElementById('rc-periodo-a').value  : '';
+
+  // Mappa serieId → {da, a, qtTot, fmtIdx, nome}
+  var serieMap = {};
+
+  lotti.forEach(function(l){
+    var d = l.data || '';
+    if(gDal && d && d < gDal) return;
+    if(gAl  && d && d > gAl)  return;
+    l.prodotti.forEach(function(p){
+      if(!p.serieId) return;
+      var fi = -1;
+      for(var ki=0;ki<FMT.length;ki++){ if(Math.abs(FMT[ki]-p.fmt)<0.001){fi=ki;break;} }
+      var fmtLabel = fi>=0 ? FMT_L[fi] : (p.fmt+'L');
+      // Raccoglie tutti i segmenti usati (conDa/conA o segmenti[])
+      var segs = (p.segmenti && p.segmenti.length) ? p.segmenti : (p.conDa != null && p.conA != null ? [{da:p.conDa, a:p.conA}] : []);
+      segs.forEach(function(sg){
+        if(sg.da == null || sg.a == null) return;
+        var key = p.serieId + '_' + sg.da + '_' + sg.a;
+        if(!serieMap[key]){
+          var sInfo = infoSerie(p.serieId);
+          var nomeSerie = sInfo ? (sInfo.nome || sInfo.id || p.serieId) : p.serieId;
+          serieMap[key] = {
+            serieId: p.serieId,
+            nomeSerie: nomeSerie,
+            fi: fi,
+            fmt: p.fmt,
+            fmtLabel: fmtLabel,
+            da: sg.da,
+            a: sg.a,
+            qt: sg.a - sg.da + 1,
+            auto: true
+          };
+        }
+      });
+    });
+  });
+
+  // Mantieni le righe manuali (auto:false) già presenti e ricostruisci le auto
+  var manuali = RC_SERIE.filter(function(r){ return !r.auto; });
+  RC_SERIE = [];
+
+  // Costruisci lista ordinata: prima per nome serie, poi per Da
+  var autoList = [];
+  Object.keys(serieMap).forEach(function(k){ autoList.push(serieMap[k]); });
+  autoList.sort(function(a,b){
+    if(a.nomeSerie < b.nomeSerie) return -1;
+    if(a.nomeSerie > b.nomeSerie) return 1;
+    return a.da - b.da;
+  });
+
+  // Per ogni serie auto calcola litri idrici e anidri
+  autoList.forEach(function(s){
+    var fmtL = parseFloat(s.fmt) || 0;
+    // Calcola grado medio pesato cercando nei lotti il prodotto che usa questa serie+range
+    var gradi = [], qtTot = 0;
+    lotti.forEach(function(l){
+      (l.prodotti||[]).forEach(function(p){
+        if(p.serieId !== s.serieId) return;
+        var segs = (p.segmenti && p.segmenti.length) ? p.segmenti : (p.conDa != null && p.conA != null ? [{da:p.conDa,a:p.conA}] : []);
+        segs.forEach(function(sg){
+          if(sg.da == null || sg.a == null) return;
+          if(sg.da === s.da && sg.a === s.a){
+            // Cerca il grado: prima in giacenze, poi nella ricetta
+            var g2 = 0;
+            if(giacenze[p.nome] && giacenze[p.nome].grado) g2 = giacenze[p.nome].grado;
+            else {
+              // prova a trovare per chiave parziale
+              var keys = Object.keys(giacenze);
+              for(var ki2=0;ki2<keys.length;ki2++){
+                if(keys[ki2].toLowerCase() === (p.nome||'').toLowerCase()){
+                  g2 = giacenze[keys[ki2]].grado; break;
+                }
+              }
+            }
+            var qt2 = sg.a - sg.da + 1;
+            if(g2>0){ gradi.push(g2 * qt2); qtTot += qt2; }
+          }
+        });
+      });
+    });
+    var grMedia = (qtTot > 0) ? (gradi.reduce(function(a,b){return a+b;},0) / qtTot) : RC_GM;
+    var ltIdr = s.qt * fmtL;
+    var ltAni = ltIdr * (grMedia / 100) * 0.9775;
+
+    RC_SERIE.push({
+      serie: s.nomeSerie,
+      fmt: fmtL,
+      fmtLabel: s.fmtLabel,
+      da: s.da,
+      a: s.a,
+      ltIdr: ltIdr,
+      ltAni: ltAni,
+      grMedia: parseFloat(grMedia.toFixed(2)),
+      auto: true
+    });
+  });
+
+  // Aggiungi righe manuali in coda
+  manuali.forEach(function(r){ RC_SERIE.push(r); });
+
+  rcRenderSerie();
+}
+
+function rcAggiornaGiacenza(){
+  var m = calcolaMagazzino();
+  // Litri anidri disponibili per contrassegni = Alcol ani + Creme ani + Aromi ani × 10%
+  var anidriTot = m.gAlcA + m.gCreA + m.gAroA * 0.10;
+
+  // Riga giacenza iniziale (titolo documento)
+  var gDal = document.getElementById('rc-periodo-da') ? document.getElementById('rc-periodo-da').value : '';
+  var gAl  = document.getElementById('rc-periodo-a')  ? document.getElementById('rc-periodo-a').value  : '';
+  var gData= document.getElementById('rc-data-giac')  ? document.getElementById('rc-data-giac').value  : '';
+
+  // Calcola consumato nel periodo
+  var mPer = calcolaMagazzinoFiltrato(gDal, gAl);
+
+  var tb = document.getElementById('tb-rc-giac');
+  if(!tb) return;
+
+  function _f(v){ return (v>=0?'+':'')+v.toFixed(3); }
+  function _n(v){ return v.toFixed(3); }
+
+  var rows = '';
+  rows += '<tr><td style="font-weight:500">Giacenza al '+( gData||'—')+'</td>'+
+    '<td class="qty-num alc-t">'+_n(m.gAlcI)+'</td><td class="qty-num alc-t">'+_n(m.gAlcA)+'</td>'+
+    '<td class="qty-num cre-t">'+_n(m.gCreI)+'</td><td class="qty-num cre-t">'+_n(m.gCreA)+'</td>'+
+    '<td class="qty-num aro-t">'+_n(m.gAroI)+'</td><td class="qty-num aro-t">'+_n(m.gAroA)+'</td></tr>';
+
+  rows += '<tr><td>+ Introdotto ('+( gDal||'...')+'→'+(gAl||'...')+')</td>'+
+    '<td class="qty-num alc-t">'+_n(mPer.aqAlcI)+'</td><td class="qty-num alc-t">'+_n(mPer.aqAlcA)+'</td>'+
+    '<td class="qty-num cre-t">'+_n(mPer.aqCreI)+'</td><td class="qty-num cre-t">'+_n(mPer.aqCreA)+'</td>'+
+    '<td class="qty-num aro-t">'+_n(mPer.aqAroI)+'</td><td class="qty-num aro-t">'+_n(mPer.aqAroA)+'</td></tr>';
+
+  rows += '<tr><td>− Impiegato ('+( gDal||'...')+'→'+(gAl||'...')+')</td>'+
+    '<td class="qty-num alc-t" style="color:var(--rose)">−'+mPer.coAlcI.toFixed(3)+'</td><td class="qty-num alc-t" style="color:var(--rose)">−'+mPer.coAlcA.toFixed(3)+'</td>'+
+    '<td class="qty-num cre-t" style="color:var(--rose)">−'+mPer.coCreI.toFixed(3)+'</td><td class="qty-num cre-t" style="color:var(--rose)">−'+mPer.coCreA.toFixed(3)+'</td>'+
+    '<td class="qty-num aro-t" style="color:var(--rose)">−'+mPer.coAroI.toFixed(3)+'</td><td class="qty-num aro-t" style="color:var(--rose)">−'+mPer.coAroA.toFixed(3)+'</td></tr>';
+
+  rows += '<tr class="tot-row"><td>Totale carico (periodo)</td>'+
+    '<td class="qty-num alc-t">'+_n(mPer.aqAlcI-mPer.coAlcI)+'</td><td class="qty-num alc-t">'+_n(mPer.aqAlcA-mPer.coAlcA)+'</td>'+
+    '<td class="qty-num cre-t">'+_n(mPer.aqCreI-mPer.coCreI)+'</td><td class="qty-num cre-t">'+_n(mPer.aqCreA-mPer.coCreA)+'</td>'+
+    '<td class="qty-num aro-t">'+_n(mPer.aqAroI-mPer.coAroI)+'</td><td class="qty-num aro-t">'+_n(mPer.aqAroA-mPer.coAroA)+'</td></tr>';
+
+  rows += '<tr style="background:#fdf8ee"><td style="font-weight:600">Giacenza al (fine periodo)</td>'+
+    '<td class="qty-num alc-t" style="font-weight:600">'+_n(m.gAlcI)+'</td><td class="qty-num alc-t" style="font-weight:600">'+_n(m.gAlcA)+'</td>'+
+    '<td class="qty-num cre-t" style="font-weight:600">'+_n(m.gCreI)+'</td><td class="qty-num cre-t" style="font-weight:600">'+_n(m.gCreA)+'</td>'+
+    '<td class="qty-num aro-t" style="font-weight:600">'+_n(m.gAroI)+'</td><td class="qty-num aro-t" style="font-weight:600">'+_n(m.gAroA)+'</td></tr>';
+
+  tb.innerHTML = rows;
+
+  // Salva totale anidri disponibili come variabile globale per il composer
+  window._rcAnidriDisp = anidriTot;
+  var anidriTotEl = document.getElementById('rc-anidri-tot');
+  if(anidriTotEl) anidriTotEl.textContent = anidriTot.toFixed(3).replace('.',',');
+}
+
+function rcAggiornaTutto(){
+  rcAggiornaGiacenza();
+  rcCalcolaSerieAutomatiche();
+  rcCalcolaImporto();
+}
+
+function rcBuildComposer(){
+  var tb = document.getElementById('tb-rc-composer');
+  if(!tb) return;
+  var rows = '';
+  for(var i=0;i<RC_FMT.length;i++){
+    var fmtLabel = RC_FMT_L[i];
+    var tipo = RC_TIPO[i];
+    var ani = (RC_FMT[i] * RC_COEFF).toFixed(4);
+    rows += '<tr data-fi="'+i+'">'+
+      '<td><span class="badge" style="background:var(--cream2);color:var(--purple)">Tipo '+tipo+'</span></td>'+
+      '<td style="font-family:\'Courier New\',Courier,monospace;font-weight:500">'+fmtLabel+'</td>'+
+      '<td class="qty-num" style="font-family:\'Courier New\',Courier,monospace">'+RC_GM+'</td>'+
+      '<td><input type="number" class="rc-qt" min="0" step="1" value="0" data-fi="'+i+'" style="width:90px;text-align:right" oninput="rcCalcolaImporto()"></td>'+
+      '<td class="qty-num rc-ani-row" id="rc-ani-'+i+'">0,000</td>'+
+      '<td class="qty-num" id="rc-imp-'+i+'">0 × €'+RC_COSTO.toFixed(2)+' = €0,00</td>'+
+    '</tr>';
+  }
+  tb.innerHTML = rows;
+}
+
+function rcCalcolaImporto(){
+  var costo = parseFloat(document.getElementById('rc-costo') ? document.getElementById('rc-costo').value : RC_COSTO) || RC_COSTO;
+  var totQt=0, totAni=0, totImp=0;
+  for(var i=0;i<RC_FMT.length;i++){
+    var inp = document.querySelector('input.rc-qt[data-fi="'+i+'"]');
+    var qt = inp ? (parseInt(inp.value)||0) : 0;
+    var ani = qt * RC_FMT[i] * RC_COEFF;
+    var imp = qt * costo;
+    totQt  += qt;
+    totAni += ani;
+    totImp += imp;
+    var aniEl = document.getElementById('rc-ani-'+i);
+    var impEl = document.getElementById('rc-imp-'+i);
+    if(aniEl) aniEl.textContent = ani.toFixed(3).replace('.',',');
+    if(impEl) impEl.textContent = qt+' × €'+costo.toFixed(2)+' = €'+imp.toFixed(2).replace('.',',');
+  }
+  var el_totQt  = document.getElementById('rc-tot-qt');
+  var el_totAni = document.getElementById('rc-tot-ani');
+  var el_totImp = document.getElementById('rc-tot-importo');
+  if(el_totQt)  el_totQt.textContent  = totQt;
+  if(el_totAni) el_totAni.textContent = totAni.toFixed(3).replace('.',',');
+  if(el_totImp) el_totImp.textContent = '€ '+totImp.toFixed(2).replace('.',',');
+
+  // Rimasto
+  var disp = (window._rcAnidriDisp||0);
+  var rim  = disp - totAni;
+  var rimEl = document.getElementById('rc-anidri-rim');
+  if(rimEl){
+    rimEl.textContent = rim.toFixed(3).replace('.',',');
+    rimEl.style.color = rim<-0.01?'var(--rose)':(rim<0.5?'var(--green)':'var(--dark)');
+  }
+  var badge = document.getElementById('rc-ok-badge');
+  if(badge){
+    if(Math.abs(rim)<0.5 && totQt>0){
+      badge.style.display='inline-block';
+      badge.style.background='#e8f5ee';
+      badge.style.color='var(--green)';
+      badge.style.border='1px solid var(--green)';
+      badge.textContent='✅ OK — Litri bilanciati';
+    } else if(rim<-0.01){
+      badge.style.display='inline-block';
+      badge.style.background='#fdeef2';
+      badge.style.color='var(--rose)';
+      badge.style.border='1px solid var(--rose)';
+      badge.textContent='⚠️ Supera disponibilità';
+    } else {
+      badge.style.display='none';
+    }
+  }
+}
+
+function rcAddSerie(){
+  RC_SERIE.push({serie:'', fmt:'', fmtLabel:'', da:'', a:'', ltIdr:'', ltAni:'', grMedia:22, auto:false});
+  rcRenderSerie();
+}
+
+function rcRenderSerie(){
+  var tb = document.getElementById('tb-rc-serie');
+  if(!tb) return;
+  var totEl = document.getElementById('rc-serie-totali');
+  if(!RC_SERIE.length){
+    tb.innerHTML='<tr><td colspan="8" class="empty">Nessun VIA nel periodo — i contrassegni applicati vengono rilevati automaticamente.</td></tr>';
+    if(totEl) totEl.textContent='';
+    return;
+  }
+  // Costruisci con DOM per evitare problemi di escape su Safari
+  tb.innerHTML='';
+  var totIdr=0, totAni=0;
+  for(var i=0;i<RC_SERIE.length;i++){
+    var s=RC_SERIE[i];
+    var li=parseFloat(s.ltIdr)||0;
+    var la=parseFloat(s.ltAni)||0;
+    totIdr+=li; totAni+=la;
+
+    var tr=document.createElement('tr');
+    if(s.auto) tr.style.background='#fafff8';
+
+    // Cella nome serie
+    var td0=document.createElement('td');
+    var inpSerie=document.createElement('input');
+    inpSerie.type='text'; inpSerie.value=s.serie||''; inpSerie.placeholder='ACK'; inpSerie.style.width='70px';
+    (function(idx){ inpSerie.oninput=function(){ rcSerieSave(idx,'serie',this.value); }; })(i);
+    td0.appendChild(inpSerie); tr.appendChild(td0);
+
+    // Cella formato
+    var td1=document.createElement('td');
+    if(s.auto){
+      td1.style.fontFamily='Courier New,Courier,monospace'; td1.style.fontSize='12px'; td1.style.color='var(--purple)';
+      td1.textContent=s.fmtLabel||s.fmt||'—';
+    } else {
+      var sel=document.createElement('select'); sel.style.width='80px';
+      var opt0=document.createElement('option'); opt0.value=''; opt0.textContent='—'; sel.appendChild(opt0);
+      for(var fi2=0;fi2<RC_FMT.length;fi2++){
+        var opt=document.createElement('option');
+        opt.value=String(RC_FMT[fi2]); opt.textContent=RC_FMT_L[fi2];
+        if(Math.abs(parseFloat(s.fmt)-RC_FMT[fi2])<0.001) opt.selected=true;
+        sel.appendChild(opt);
+      }
+      (function(idx){ sel.onchange=function(){
+        var fl=this.options[this.selectedIndex].text;
+        rcSerieSave(idx,'fmt',this.value); rcSerieSave(idx,'fmtLabel',fl);
+      }; })(i);
+      td1.appendChild(sel);
+    }
+    tr.appendChild(td1);
+
+    // Cella Da
+    var td2=document.createElement('td');
+    var inpDa=document.createElement('input');
+    inpDa.type='number'; inpDa.value=s.da||''; inpDa.placeholder='1'; inpDa.style.width='80px';
+    (function(idx){ inpDa.oninput=function(){ rcSerieSave(idx,'da',this.value); }; })(i);
+    td2.appendChild(inpDa); tr.appendChild(td2);
+
+    // Cella A
+    var td3=document.createElement('td');
+    var inpA=document.createElement('input');
+    inpA.type='number'; inpA.value=s.a||''; inpA.placeholder='500'; inpA.style.width='80px';
+    (function(idx){ inpA.oninput=function(){ rcSerieSave(idx,'a',this.value); }; })(i);
+    td3.appendChild(inpA); tr.appendChild(td3);
+
+    // Cella Lt idrici
+    var td4=document.createElement('td');
+    var inpIdr=document.createElement('input');
+    inpIdr.type='number'; inpIdr.value=li||''; inpIdr.placeholder='0.000'; inpIdr.step='0.001'; inpIdr.style.width='90px';
+    (function(idx){ inpIdr.oninput=function(){ rcSerieSave(idx,'ltIdr',this.value); }; })(i);
+    td4.appendChild(inpIdr); tr.appendChild(td4);
+
+    // Cella Lt anidri
+    var td5=document.createElement('td');
+    var inpAni=document.createElement('input');
+    inpAni.type='number'; inpAni.value=la||''; inpAni.placeholder='0.000'; inpAni.step='0.001'; inpAni.style.width='90px';
+    (function(idx){ inpAni.oninput=function(){ rcSerieSave(idx,'ltAni',this.value); }; })(i);
+    td5.appendChild(inpAni); tr.appendChild(td5);
+
+    // Cella Gr. media
+    var td6=document.createElement('td');
+    var inpGr=document.createElement('input');
+    inpGr.type='number'; inpGr.value=s.grMedia||22; inpGr.step='0.1'; inpGr.style.width='60px';
+    (function(idx){ inpGr.oninput=function(){ rcSerieSave(idx,'grMedia',this.value); }; })(i);
+    td6.appendChild(inpGr); tr.appendChild(td6);
+
+    // Cella elimina
+    var td7=document.createElement('td'); td7.className='no-print';
+    var btnDel=document.createElement('button');
+    btnDel.className='btn btn-danger btn-sm'; btnDel.textContent='✕';
+    (function(idx){ btnDel.onclick=function(){ rcDelSerie(idx); }; })(i);
+    td7.appendChild(btnDel); tr.appendChild(td7);
+
+    tb.appendChild(tr);
+  }
+  if(totEl){
+    var autoCount=RC_SERIE.filter(function(r){return r.auto;}).length;
+    totEl.innerHTML='TOTALE: <strong>'+RC_SERIE.length+'</strong> serie — '+totIdr.toFixed(3)+' L idrici — '+totAni.toFixed(3)+' L anidri'+(autoCount?' &nbsp;<span style="color:var(--green);font-size:10px">⬤ '+autoCount+' auto da VIA</span>':'');
+  }
+}
+
+function rcSerieSave(i,campo,val){
+  if(!RC_SERIE[i]) return;
+  RC_SERIE[i][campo]=val;
+  RC_SERIE[i].auto=false; // modificata manualmente
+  var totIdr=0, totAni=0;
+  for(var j=0;j<RC_SERIE.length;j++){
+    totIdr+=parseFloat(RC_SERIE[j].ltIdr)||0;
+    totAni+=parseFloat(RC_SERIE[j].ltAni)||0;
+  }
+  var totEl=document.getElementById('rc-serie-totali');
+  if(totEl) totEl.textContent='TOTALE: '+RC_SERIE.length+' serie — '+totIdr.toFixed(3)+' L idrici — '+totAni.toFixed(3)+' L anidri';
+}
+
+function rcDelSerie(i){
+  RC_SERIE.splice(i,1);
+  rcRenderSerie();
+}
+
+function rcGetDati(){
+  var gData = document.getElementById('rc-data-giac')  ? document.getElementById('rc-data-giac').value  : '';
+  var gDal  = document.getElementById('rc-periodo-da') ? document.getElementById('rc-periodo-da').value : '';
+  var gAl   = document.getElementById('rc-periodo-a')  ? document.getElementById('rc-periodo-a').value  : '';
+  var costo = parseFloat(document.getElementById('rc-costo') ? document.getElementById('rc-costo').value : RC_COSTO) || RC_COSTO;
+  var m     = calcolaMagazzino();
+  var mPer  = calcolaMagazzinoFiltrato(gDal, gAl);
+  var anidriDisp = m.gAlcA + m.gCreA + m.gAroA * 0.10;
+
+  var qtArr=[], aniArr=[], impArr=[];
+  var totQt=0, totAni=0, totImp=0;
+  for(var i=0;i<RC_FMT.length;i++){
+    var inp = document.querySelector('input.rc-qt[data-fi="'+i+'"]');
+    var qt  = inp ? (parseInt(inp.value)||0) : 0;
+    var ani = qt * RC_FMT[i] * RC_COEFF;
+    var imp = qt * costo;
+    qtArr.push(qt); aniArr.push(ani); impArr.push(imp);
+    totQt+=qt; totAni+=ani; totImp+=imp;
+  }
+  return {gData:gData,gDal:gDal,gAl:gAl,costo:costo,m:m,mPer:mPer,
+    anidriDisp:anidriDisp,qtArr:qtArr,aniArr:aniArr,impArr:impArr,
+    totQt:totQt,totAni:totAni,totImp:totImp};
+}
+
+function rcStampaPDF(){
+  var d = rcGetDati();
+  var m = d.m;
+  var mPer = d.mPer;
+
+  function _n(v){ return parseFloat(v||0).toFixed(3).replace('.',','); }
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  // Costruisce HTML completo da aprire in nuova scheda
+  // Su Safari iOS: la pagina si apre → Condividi → Salva PDF
+  var H = '<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8">';
+  H += '<meta name="viewport" content="width=device-width,initial-scale=1">';
+  H += '<title>Richiesta Contrassegni '+esc(d.gData||'')+'</title>';
+  H += '<style>';
+  H += 'body{font-family:Arial,sans-serif;font-size:11px;color:#111;margin:20px;line-height:1.5}';
+  H += 'h1{font-size:14px;margin:0 0 2px}h2{font-size:12px;margin:12px 0 4px;border-bottom:1px solid #999;padding-bottom:2px}';
+  H += 'p{margin:2px 0}';
+  H += 'table{width:100%;border-collapse:collapse;margin-bottom:8px;font-size:10.5px}';
+  H += 'th{background:#f0ece4;font-weight:bold;text-align:left;padding:3px 5px;border:1px solid #ccc}';
+  H += 'td{padding:3px 5px;border:1px solid #ddd}';
+  H += '.tot td{font-weight:bold;background:#f8f5ef}';
+  H += '.num{text-align:right;font-family:monospace}';
+  H += '.hint{font-size:10px;color:#555;margin-top:6px;border:1px solid #bbb;padding:6px 8px;background:#fffbe8;border-radius:4px}';
+  H += '@media print{.hint{display:none}}';
+  H += '</style></head><body>';
+
+  // Intestazione
+  H += '<h1>NASTRO LIQUORI di GIANPIERO NASTRO</h1>';
+  H += '<p>Corso Trieste n°23 - 84018 - Scafati (Sa)</p>';
+  H += '<p>P.IVA: 05455470657 &nbsp;|&nbsp; C.F.: NSTGPR68R07C129V &nbsp;|&nbsp; UTF / Cod. Accise: SAX00379E</p>';
+  H += '<hr style="margin:8px 0">';
+  H += '<h2 style="font-size:13px;border:none">RICHIESTA CONTRASSEGNI DI STATO</h2>';
+  H += '<p>Data giacenza: <strong>'+esc(d.gData||'—')+'</strong> &nbsp;&nbsp; Periodo: <strong>'+esc(d.gDal||'...')+' &rarr; '+esc(d.gAl||'...')+'</strong></p>';
+
+  // Suggerimento per iOS
+  H += '<p class="hint">&#128236; Per salvare come PDF: tocca <strong>Condividi</strong> (&uarr;) &rarr; <strong>Stampa</strong> o <strong>Salva in File come PDF</strong></p>';
+
+  // PAG.1 — CONTRASSEGNI
+  H += '<h2>PAG. 1 — CONTRASSEGNI DA RICHIEDERE</h2>';
+  H += '<table><thead><tr><th>Tipo</th><th>Formato</th><th>Giac.M.</th><th class="num">Qt.</th><th class="num">L Anidri</th><th class="num">Importo</th></tr></thead><tbody>';
+  var hasQt=false;
+  for(var i=0;i<RC_FMT.length;i++){
+    if(!d.qtArr[i]) continue;
+    hasQt=true;
+    H += '<tr><td>'+esc(RC_TIPO[i])+'</td><td>'+esc(RC_FMT_L[i])+'</td><td class="num">'+RC_GM+'</td>';
+    H += '<td class="num">'+d.qtArr[i]+'</td><td class="num">'+_n(d.aniArr[i])+'</td>';
+    H += '<td class="num">&euro; '+d.impArr[i].toFixed(2).replace('.',',')+'</td></tr>';
+  }
+  if(!hasQt) H += '<tr><td colspan="6" style="color:#999;font-style:italic">(nessun contrassegno inserito)</td></tr>';
+  H += '</tbody><tfoot class="tot"><tr><td colspan="3">TOTALE</td>';
+  H += '<td class="num">'+d.totQt+'</td><td class="num">'+_n(d.totAni)+'</td>';
+  H += '<td class="num">&euro; '+d.totImp.toFixed(2).replace('.',',')+'</td></tr></tfoot></table>';
+
+  H += '<p>Alcol anidro disponibile: <strong>'+_n(d.anidriDisp)+'</strong> L</p>';
+  H += '<p>Alcol anidro richiesto: <strong>'+_n(d.totAni)+'</strong> L</p>';
+  H += '<p>Differenza: <strong>'+_n(d.anidriDisp-d.totAni)+'</strong> L</p>';
+  H += '<p style="margin-top:6px"><strong>Importo bonifico: &euro; '+d.totImp.toFixed(2).replace('.',',')+'</strong> (&euro; '+d.costo.toFixed(2)+' &times; '+d.totQt+' contrassegni)</p>';
+
+  // PAG.1 — GIACENZA
+  H += '<h2>GIACENZA ALCOOL, CREME E AROMI</h2>';
+  H += '<table><thead><tr><th></th><th class="num">Alc Idr.</th><th class="num">Alc Ani.</th><th class="num">Cre Idr.</th><th class="num">Cre Ani.</th><th class="num">Aro Idr.</th><th class="num">Aro Ani.</th></tr></thead><tbody>';
+  function gRow(lbl,ai,aa,ci,ca,ri,ra){
+    H+='<tr><td>'+esc(lbl)+'</td><td class="num">'+_n(ai)+'</td><td class="num">'+_n(aa)+'</td><td class="num">'+_n(ci)+'</td><td class="num">'+_n(ca)+'</td><td class="num">'+_n(ri)+'</td><td class="num">'+_n(ra)+'</td></tr>';
+  }
+  gRow('Giacenza al '+(d.gData||'—'), m.gAlcI,m.gAlcA, m.gCreI,m.gCreA, m.gAroI,m.gAroA);
+  gRow('+ Introdotto', mPer.aqAlcI,mPer.aqAlcA, mPer.aqCreI,mPer.aqCreA, mPer.aqAroI,mPer.aqAroA);
+  gRow('- Impiegato', mPer.coAlcI,mPer.coAlcA, mPer.coCreI,mPer.coCreA, mPer.coAroI,mPer.coAroA);
+  gRow('Totale carico', mPer.aqAlcI-mPer.coAlcI,mPer.aqAlcA-mPer.coAlcA, mPer.aqCreI-mPer.coCreI,mPer.aqCreA-mPer.coCreA, mPer.aqAroI-mPer.coAroI,mPer.aqAroA-mPer.coAroA);
+  gRow('Giacenza fine periodo', m.gAlcI,m.gAlcA, m.gCreI,m.gCreA, m.gAroI,m.gAroA);
+  H += '</tbody></table>';
+
+  // PAG.2 — SERIE APPLICATE
+  if(RC_SERIE.length){
+    H += '<h2>PAG. 2 — CONTRASSEGNI APPLICATI — SERIE</h2>';
+    H += '<table><thead><tr><th>Serie</th><th>Formato</th><th class="num">Da</th><th class="num">A</th><th class="num">Lt. Idrici</th><th class="num">Lt. Anidri</th><th class="num">Gr.Med</th></tr></thead><tbody>';
+    var totI2=0, totA2=0;
+    for(var j=0;j<RC_SERIE.length;j++){
+      var sr=RC_SERIE[j];
+      var li2=parseFloat(sr.ltIdr)||0; var la2=parseFloat(sr.ltAni)||0;
+      totI2+=li2; totA2+=la2;
+      H += '<tr><td>'+esc(sr.serie||'—')+'</td><td>'+esc(sr.fmtLabel||sr.fmt||'—')+'</td>';
+      H += '<td class="num">'+esc(sr.da||'—')+'</td><td class="num">'+esc(sr.a||'—')+'</td>';
+      H += '<td class="num">'+_n(li2)+'</td><td class="num">'+_n(la2)+'</td><td class="num">'+esc(sr.grMedia||22)+'</td></tr>';
+    }
+    H += '</tbody><tfoot class="tot"><tr><td colspan="4">TOTALE</td>';
+    H += '<td class="num">'+_n(totI2)+'</td><td class="num">'+_n(totA2)+'</td><td></td></tr></tfoot></table>';
+  }
+
+  H += '</body></html>';
+
+  // Apre in nuova scheda — Safari iOS permette window.open() da evento tap
+  var w = window.open('','_blank');
+  if(w){ w.document.write(H); w.document.close(); }
+  else { alert('Il browser ha bloccato la nuova finestra. Abilita i popup per questo sito.'); }
+}
+
 // ===================== RANGE CONTRASSEGNI =====================
 
 // Calcola il prossimo numero DA per una serie (dopo tutti gli utilizzi salvati)
@@ -4017,6 +4654,7 @@ function showTab(t,e){
   if(t==='carichi')renderCarichi();
   if(t==='magazzino')renderMagazzino();
   if(t==='contrassegni')renderContrassegni();
+  if(t==='richiesta-con')rcInit();
 }
 
 // Naviga a un tab per nome (usato dai pulsanti della home)
