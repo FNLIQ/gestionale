@@ -292,12 +292,51 @@ input:focus,select:focus{outline:none;border-color:var(--gold);background:#fff}
         <button onclick="esportaExcel();chiudiBackupMenu()" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:var(--cream);text-align:left;font-family:inherit;font-size:13px;cursor:pointer;border-bottom:1px solid rgba(245,240,232,0.1)" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='none'">⬇ Backup Excel</button>
         <button onclick="importaDati();chiudiBackupMenu()" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:var(--cream);text-align:left;font-family:inherit;font-size:13px;cursor:pointer;border-bottom:1px solid rgba(245,240,232,0.1)" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='none'">⬆ Importa</button>
         <button onclick="sincronizzaGist();chiudiBackupMenu()" id="btn-gist-menu" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:#7ec8a0;text-align:left;font-family:inherit;font-size:13px;cursor:pointer;border-bottom:1px solid rgba(245,240,232,0.1)" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='none'">☁ Sincronizza Gist</button>
-        <button onclick="apriImpostazioniGist();chiudiBackupMenu()" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:rgba(245,240,232,0.55);text-align:left;font-family:inherit;font-size:11px;cursor:pointer;letter-spacing:.05em" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='none'">⚙ Configura Gist...</button>
+        <button onclick="apriImpostazioniGist();chiudiBackupMenu()" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:rgba(245,240,232,0.55);text-align:left;font-family:inherit;font-size:11px;cursor:pointer;letter-spacing:.05em;border-bottom:1px solid rgba(245,240,232,0.1)" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='none'">⚙ Configura Gist...</button>
+        <button onclick="apriImpostazioniPassword();chiudiBackupMenu()" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:rgba(245,240,232,0.55);text-align:left;font-family:inherit;font-size:11px;cursor:pointer;letter-spacing:.05em" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='none'">🔒 Password accesso...</button>
       </div>
     </div>
     <input type="file" id="import-file" accept=".json" style="display:none" onchange="leggiImport(event)">
   </div>
 </header>
+
+<!-- SCHERMATA LOGIN -->
+<div id="login-screen" style="display:none;position:fixed;inset:0;background:var(--dark2);z-index:2000;align-items:center;justify-content:center;flex-direction:column">
+  <div style="text-align:center;margin-bottom:2rem">
+    <div style="font-family:Georgia,'Times New Roman',serif;font-size:28px;color:var(--cream);letter-spacing:.02em">🍋 Nastro Liquori</div>
+    <div style="font-family:'Courier New',monospace;font-size:10px;color:var(--gold-light);letter-spacing:.15em;text-transform:uppercase;margin-top:6px">Gestionale di produzione</div>
+  </div>
+  <div style="background:#fff;border-radius:14px;padding:2rem;max-width:340px;width:90%;box-shadow:0 12px 48px rgba(0,0,0,0.3)">
+    <label for="login-pwd" style="font-family:'Courier New',monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#6b6057;display:block;margin-bottom:8px">Password</label>
+    <input id="login-pwd" type="password" placeholder="Inserisci la password" style="width:100%;border:1px solid #ddd;border-radius:8px;padding:10px 14px;font-size:15px;margin-bottom:.75rem;font-family:inherit" onkeydown="if(event.keyCode===13)verificaLogin()">
+    <div id="login-err" style="color:#c0392b;font-size:12px;min-height:16px;margin-bottom:.75rem"></div>
+    <button onclick="verificaLogin()" style="width:100%;padding:11px;border-radius:8px;border:none;background:var(--dark2);color:var(--gold-light);font-size:14px;font-weight:500;cursor:pointer;font-family:inherit;letter-spacing:.04em">Entra</button>
+    <div style="margin-top:1rem;text-align:center">
+      <button onclick="apriImpostazioniPassword()" style="background:none;border:none;color:#aaa;font-size:11px;cursor:pointer;font-family:inherit">Cambia password</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODALE CAMBIO PASSWORD -->
+<div id="pwd-modal" style="display:none;position:fixed;inset:0;background:rgba(26,22,18,0.55);z-index:1500;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:14px;padding:1.75rem 2rem;max-width:380px;width:90%;box-shadow:0 12px 48px rgba(26,22,18,0.22)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem">
+      <span style="font-family:Georgia,serif;font-size:16px;font-weight:500;color:var(--dark)">🔒 Imposta password</span>
+      <button onclick="chiudiImpostazioniPassword()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999">&times;</button>
+    </div>
+    <label for="pwd-current">Password attuale (lascia vuoto se prima volta)</label>
+    <input id="pwd-current" type="password" placeholder="Password attuale" style="margin-bottom:.75rem">
+    <label for="pwd-new">Nuova password</label>
+    <input id="pwd-new" type="password" placeholder="Nuova password" style="margin-bottom:.75rem">
+    <label for="pwd-confirm">Conferma nuova password</label>
+    <input id="pwd-confirm" type="password" placeholder="Ripeti la password" style="margin-bottom:1rem">
+    <div id="pwd-status" style="font-size:12px;min-height:16px;margin-bottom:1rem;color:#555"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button onclick="chiudiImpostazioniPassword()" style="padding:8px 18px;border-radius:8px;border:1px solid var(--cream3);background:var(--cream);color:var(--dark);font-size:13px;cursor:pointer;font-family:inherit">Annulla</button>
+      <button onclick="salvaPassword()" style="padding:8px 18px;border-radius:8px;border:none;background:var(--dark2);color:var(--gold-light);font-size:13px;cursor:pointer;font-family:inherit;font-weight:500">Salva</button>
+    </div>
+  </div>
+</div>
 
 <!-- MODALE GIST -->
 <div id="gist-modal" style="display:none;position:fixed;inset:0;background:rgba(26,22,18,0.55);z-index:1000;align-items:center;justify-content:center">
@@ -1080,7 +1119,27 @@ function salva(){
   }catch(e){}
   _modificheNonSalvate++;
   aggiornaIndicatoreSalvataggio();
+  // Auto-sync Gist in background (silenzioso, non blocca)
+  if(typeof _gistSyncTimer!=='undefined') clearTimeout(_gistSyncTimer);
+  _gistSyncTimer=setTimeout(function(){
+    var c=gistConf();
+    if(!c.id||!c.token) return;
+    var payload={}; payload[c.file]={"content":JSON.stringify(raccogliDatiExport(),null,2)};
+    var xhr=new XMLHttpRequest();
+    xhr.open('PATCH','https://api.github.com/gists/'+c.id);
+    xhr.setRequestHeader('Authorization','token '+c.token);
+    xhr.setRequestHeader('Accept','application/vnd.github.v3+json');
+    xhr.setRequestHeader('Content-Type','application/json');
+    xhr.onload=function(){
+      if(xhr.status===200){
+        var ind=document.getElementById('save-indicator');
+        if(ind){ ind.textContent='✓ Salvato e sincronizzato'; ind.classList.add('show'); setTimeout(function(){ind.classList.remove('show');},2000); }
+      }
+    };
+    xhr.send(JSON.stringify({"files":payload}));
+  },3000); // aspetta 3 secondi di inattività prima di sincronizzare
 }
+var _gistSyncTimer;
 function carica(){
   // Prima leggi i dati incorporati nel file (se presenti)
   if(_DATI_INCORPORATI){
@@ -4649,6 +4708,75 @@ function aggiornaIndicatoreSalvataggio(){
 }
 
 // ===================== BACKUP MENU =====================
+// ===================== LOGIN / PASSWORD =====================
+var _PWD_KEY='liq_pwd_hash';
+var _SESSION_KEY='liq_session';
+
+function hashSemplice(s){
+  var h=0;
+  for(var i=0;i<s.length;i++){ h=((h<<5)-h)+s.charCodeAt(i); h=h&h; }
+  return h.toString(36);
+}
+
+function iniziaLogin(){
+  var hash=''; try{ hash=localStorage.getItem(_PWD_KEY)||''; }catch(e){}
+  if(!hash){
+    // Prima apertura — nessuna password impostata, entra direttamente
+    document.getElementById('login-screen').style.display='none';
+    return;
+  }
+  // Controlla se c'è già una sessione valida (stessa giornata)
+  var sess=''; try{ sess=localStorage.getItem(_SESSION_KEY)||''; }catch(e){}
+  var oggi=new Date().toISOString().slice(0,10);
+  if(sess===oggi+':'+hash){
+    document.getElementById('login-screen').style.display='none';
+    return;
+  }
+  document.getElementById('login-screen').style.display='flex';
+}
+
+function verificaLogin(){
+  var hash=''; try{ hash=localStorage.getItem(_PWD_KEY)||''; }catch(e){}
+  var val=document.getElementById('login-pwd').value;
+  if(hashSemplice(val)===hash){
+    var oggi=new Date().toISOString().slice(0,10);
+    try{ localStorage.setItem(_SESSION_KEY,oggi+':'+hash); }catch(e){}
+    document.getElementById('login-screen').style.display='none';
+    document.getElementById('login-err').textContent='';
+  } else {
+    document.getElementById('login-err').textContent='Password errata.';
+    document.getElementById('login-pwd').value='';
+    document.getElementById('login-pwd').focus();
+  }
+}
+
+function apriImpostazioniPassword(){
+  document.getElementById('pwd-current').value='';
+  document.getElementById('pwd-new').value='';
+  document.getElementById('pwd-confirm').value='';
+  document.getElementById('pwd-status').textContent='';
+  document.getElementById('pwd-modal').style.display='flex';
+}
+function chiudiImpostazioniPassword(){
+  document.getElementById('pwd-modal').style.display='none';
+}
+function salvaPassword(){
+  var hash=''; try{ hash=localStorage.getItem(_PWD_KEY)||''; }catch(e){}
+  var cur=document.getElementById('pwd-current').value;
+  var nw=document.getElementById('pwd-new').value;
+  var conf=document.getElementById('pwd-confirm').value;
+  var st=document.getElementById('pwd-status');
+  if(hash && hashSemplice(cur)!==hash){ st.style.color='#c0392b'; st.textContent='Password attuale errata.'; return; }
+  if(!nw){ st.style.color='#c0392b'; st.textContent='Inserisci una nuova password.'; return; }
+  if(nw!==conf){ st.style.color='#c0392b'; st.textContent='Le due password non coincidono.'; return; }
+  var newHash=hashSemplice(nw);
+  try{ localStorage.setItem(_PWD_KEY,newHash); }catch(e){}
+  var oggi=new Date().toISOString().slice(0,10);
+  try{ localStorage.setItem(_SESSION_KEY,oggi+':'+newHash); }catch(e){}
+  st.style.color='#2d5a3d'; st.textContent='✓ Password salvata!';
+  setTimeout(function(){ chiudiImpostazioniPassword(); },1200);
+}
+
 // ===================== GIST SYNC =====================
 var _GIST_KEY_ID='liq_gist_id';
 var _GIST_KEY_TOKEN='liq_gist_token';
@@ -4807,6 +4935,7 @@ document.addEventListener('click',function(){chiudiBackupMenu();});
 // ===================== INIT =====================
 initGiacenze();
 carica();
+iniziaLogin();
 renderAll();
 aggiornaCampiCarico();
 // Dopo il caricamento, azzera il contatore (nessuna modifica in sospeso)
