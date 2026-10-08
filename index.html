@@ -828,6 +828,15 @@ input:focus,select:focus{outline:none;border-color:var(--gold);background:#fff}
 
 <!-- MAGAZZINO INGREDIENTI -->
 <div id="tab-magazzino" class="section">
+  <!-- PANNELLO MULTI-ANNO -->
+  <div class="card" style="background:linear-gradient(135deg,#f0f4ff,#fff);border-color:#b8c4e8;margin-bottom:1rem">
+    <div style="display:flex;align-items:center;flex-wrap:wrap;gap:12px">
+      <span style="font-family:Georgia,serif;font-weight:500;color:var(--dark);font-size:15px">📅 Anno di esercizio</span>
+      <select id="sel-anno-corrente" onchange="cambiaAnno(this.value)" style="width:120px;font-size:14px;font-family:'Courier New',Courier,monospace;font-weight:600;color:var(--dark)"></select>
+      <button class="btn btn-gold" onclick="chiudiEsercizio()" title="Porta le giacenze finali di quest'anno come iniziali del prossimo">🔒 Chiudi esercizio e apri anno successivo</button>
+      <span style="font-size:11px;color:#6b6057;font-family:'Courier New',Courier,monospace">Le giacenze iniziali dell'anno successivo vengono impostate automaticamente.</span>
+    </div>
+  </div>
   <p style="font-size:12px;color:#6b6057;margin-bottom:1rem;font-family:'Courier New',Courier,monospace;letter-spacing:.04em">Giacenza = giacenza iniziale + acquistato (carichi DDT) − consumato (lotti di produzione)</p>
   <div class="filtri-bar no-print">
     <div><label>Dal</label><input type="date" id="mag-dal" oninput="renderMagazzino()"></div>
@@ -1160,7 +1169,12 @@ function calcRicetta(nome,lt,override){
 // ===================== STATO =====================
 var anagrafica=[]; // [{id, tipo, ragione, referente, tel, piva, cf, indirizzo, citta, prov, cap, sdi, note}]
 var scontriniGruppi=[]; // [{id, periodo, dataDa, dataA, numScontrini, prodotti:[{nome,fmt,qt}], note}]
-var giacenze={};
+// MULTI-ANNO: giacenzePerAnno["2026"] = {prodotto: {grado, qt:[...]}, ...}
+var giacenzePerAnno={};
+var giacenze={}; // alias live per giacenzePerAnno[annoCorrente]
+// MULTI-ANNO: giacenzeAlcolPerAnno["2026"] = {alcol:{idr,ani}, aromi:{idr,ani}, creme:{idr,ani}}
+var giacenzeAlcolPerAnno={};
+var annoCorrente=String(new Date().getFullYear());
 var lotti=[];
 var vendite=[];
 var carichi=[];
@@ -1173,6 +1187,16 @@ var _modificheNonSalvate=0;
 var _overrideAttivo=false;
 var _pendingOverride=null;
 var _confermataOverride=null;
+
+// Imposta l'alias giacenze e GI_ALCOL/AROMI/CREME per l'anno corrente
+function aggiornaAliasAnno(){
+  if(!giacenzePerAnno[annoCorrente]) giacenzePerAnno[annoCorrente]={};
+  giacenze=giacenzePerAnno[annoCorrente];
+  var ga=giacenzeAlcolPerAnno[annoCorrente]||{};
+  GI_ALCOL=ga.alcol||{idr:0,ani:0};
+  GI_AROMI=ga.aromi||{idr:0,ani:0};
+  GI_CREME=ga.creme||{idr:0,ani:0};
+}
 
 function initGiacenze(){
   var dati=[
@@ -1198,7 +1222,9 @@ function initGiacenze(){
     ["Amaro",34,0,0,10,0,3,6,1],
     ["Baba 10",10,0,0,0,0,0,0,0]
   ];
-  dati.forEach(function(r){giacenze[r[0]]={grado:r[1],qt:[r[2],r[3],r[4],r[5],r[6],r[7],r[8]]};});
+  if(!giacenzePerAnno[annoCorrente]) giacenzePerAnno[annoCorrente]={};
+  dati.forEach(function(r){giacenzePerAnno[annoCorrente][r[0]]={grado:r[1],qt:[r[2],r[3],r[4],r[5],r[6],r[7],r[8]]};});
+  giacenze=giacenzePerAnno[annoCorrente];
 }
 
 function ltProdotto(p){var l=0;FMT.forEach(function(f,i){l+=giacenze[p].qt[i]*f;});return l;}
@@ -1208,16 +1234,21 @@ function prossimVia(){if(!lotti.length) return 1; var max=0; lotti.forEach(funct
 
 // ===================== CONTRASSEGNI — GIACENZA =====================
 function giacenzaContrassegni(){
-  // Somma totali per formato da tutte le serie di tutti i carichi
+  // Somma totali per formato dai carichi dell'anno corrente
   var tot=[0,0,0,0,0,0,0];
   contrassegniCarichi.forEach(function(c){
+    // Filtra per anno corrente (usa campo data del carico)
+    var cAnno=c.data?c.data.substring(0,4):'';
+    if(cAnno&&cAnno!==annoCorrente) return;
     (c.serie||[]).forEach(function(s){
       var idx=s.fmtIdx;
       if(idx>=0&&idx<7) tot[idx]+=(s.a-s.da+1);
     });
   });
-  // Sottrai consumo da lotti
+  // Sottrai consumo dai lotti dell'anno corrente
   lotti.forEach(function(l){
+    var lAnno=l.data?l.data.substring(0,4):'';
+    if(lAnno&&lAnno!==annoCorrente) return;
     l.prodotti.forEach(function(p){
       var idx=FMT.findIndex(function(f){ return Math.abs(f-p.fmt)<0.001; });
       if(idx>=0) tot[idx]-=(parseInt(p.qt)||0);
@@ -1228,15 +1259,19 @@ function giacenzaContrassegni(){
 
 // ===================== SALVATAGGIO =====================
 function salva(){
+  // Sincronizza l'alias prima di salvare
+  giacenzePerAnno[annoCorrente]=giacenze;
   try{
     localStorage.setItem('liq_lotti',JSON.stringify(lotti));
     localStorage.setItem('liq_vendite',JSON.stringify(vendite));
-    localStorage.setItem('liq_giacenze',JSON.stringify(giacenze));
+    localStorage.setItem('liq_giacenze_per_anno',JSON.stringify(giacenzePerAnno));
+    localStorage.setItem('liq_anno_corrente',annoCorrente);
     localStorage.setItem('liq_carichi',JSON.stringify(carichi));
     localStorage.setItem('liq_contrassegni',JSON.stringify(contrassegniCarichi));
     localStorage.setItem('liq_ricette_custom',JSON.stringify(ricetteCustom));
     localStorage.setItem('liq_anagrafica',JSON.stringify(anagrafica));
     localStorage.setItem('liq_scontrini',JSON.stringify(scontriniGruppi));
+    localStorage.setItem('liq_alcol_per_anno',JSON.stringify(giacenzeAlcolPerAnno));
   }catch(e){}
   _modificheNonSalvate++;
   aggiornaIndicatoreSalvataggio();
@@ -1261,41 +1296,76 @@ function salva(){
   },3000); // aspetta 3 secondi di inattività prima di sincronizzare
 }
 var _gistSyncTimer;
+function _migraVecchieGiacenze(d){
+  // Migrazione da vecchia struttura flat → nuova struttura per anno
+  // Se troviamo giacenze (old) ma non giacenzePerAnno (new), migriamo
+  if(d.giacenze && !d.giacenzePerAnno){
+    d.giacenzePerAnno={};
+    d.giacenzePerAnno[annoCorrente]=d.giacenze;
+  }
+  // Migrazione GI_ALCOL/AROMI/CREME → giacenzeAlcolPerAnno
+  if((d.GI_ALCOL||d.GI_AROMI||d.GI_CREME) && !d.giacenzeAlcolPerAnno){
+    d.giacenzeAlcolPerAnno={};
+    d.giacenzeAlcolPerAnno[annoCorrente]={
+      alcol: d.GI_ALCOL||{idr:0,ani:0},
+      aromi: d.GI_AROMI||{idr:0,ani:0},
+      creme: d.GI_CREME||{idr:0,ani:0}
+    };
+  }
+  return d;
+}
+
+function _applicaDati(d){
+  if(!d) return;
+  d=_migraVecchieGiacenze(d);
+  if(d.lotti) lotti=d.lotti;
+  if(d.vendite) vendite=d.vendite;
+  if(d.giacenzePerAnno) giacenzePerAnno=d.giacenzePerAnno;
+  if(d.annoCorrente) annoCorrente=d.annoCorrente;
+  if(d.giacenzeAlcolPerAnno) giacenzeAlcolPerAnno=d.giacenzeAlcolPerAnno;
+  if(d.carichi) carichi=d.carichi;
+  if(d.contrassegniCarichi) contrassegniCarichi=d.contrassegniCarichi;
+  if(d.ricetteCustom) ricetteCustom=d.ricetteCustom;
+  if(d.anagrafica) anagrafica=d.anagrafica;
+  if(d.scontriniGruppi) scontriniGruppi=d.scontriniGruppi;
+  aggiornaAliasAnno();
+}
+
 function carica(){
   // Prima leggi i dati incorporati nel file (se presenti)
   if(_DATI_INCORPORATI){
-    try{
-      var d=_DATI_INCORPORATI;
-      if(d.lotti) lotti=d.lotti;
-      if(d.vendite) vendite=d.vendite;
-      if(d.giacenze) giacenze=d.giacenze;
-      if(d.carichi) carichi=d.carichi;
-      if(d.contrassegniCarichi) contrassegniCarichi=d.contrassegniCarichi;
-      if(d.ricetteCustom) ricetteCustom=d.ricetteCustom;
-      if(d.anagrafica) anagrafica=d.anagrafica;
-      if(d.scontriniGruppi) scontriniGruppi=d.scontriniGruppi;
-    }catch(e){}
+    try{ _applicaDati(_DATI_INCORPORATI); }catch(e){}
   } else {
     // Fallback: localStorage (solo se stesso path)
     try{
       var l=localStorage.getItem('liq_lotti');
       var v=localStorage.getItem('liq_vendite');
-      var g=localStorage.getItem('liq_giacenze');
+      var gpa=localStorage.getItem('liq_giacenze_per_anno');
+      var gv=localStorage.getItem('liq_giacenze'); // vecchia chiave — migrazione
+      var ac=localStorage.getItem('liq_anno_corrente');
+      var apa=localStorage.getItem('liq_alcol_per_anno');
       var c=localStorage.getItem('liq_carichi');
       var con=localStorage.getItem('liq_contrassegni');
       var an=localStorage.getItem('liq_anagrafica');
       var sc=localStorage.getItem('liq_scontrini');
-      if(l) lotti=JSON.parse(l);
-      if(v) vendite=JSON.parse(v);
-      if(g) giacenze=JSON.parse(g);
-      if(c) carichi=JSON.parse(c);
-      if(con) contrassegniCarichi=JSON.parse(con);
-      if(an) anagrafica=JSON.parse(an);
-      if(sc) scontriniGruppi=JSON.parse(sc);
+      var tmp={};
+      if(l) tmp.lotti=JSON.parse(l);
+      if(v) tmp.vendite=JSON.parse(v);
+      if(gpa) tmp.giacenzePerAnno=JSON.parse(gpa);
+      if(gv&&!gpa) tmp.giacenze=JSON.parse(gv); // migrazione
+      if(ac) tmp.annoCorrente=ac;
+      if(apa) tmp.giacenzeAlcolPerAnno=JSON.parse(apa);
+      // vecchie chiavi GI_ALCOL ecc. vengono lette in caricaGiacenzeIniziali() poi migrate
+      if(c) tmp.carichi=JSON.parse(c);
+      if(con) tmp.contrassegniCarichi=JSON.parse(con);
+      if(an) tmp.anagrafica=JSON.parse(an);
+      if(sc) tmp.scontriniGruppi=JSON.parse(sc);
+      _applicaDati(tmp);
     }catch(e){}
   }
   caricaRicetteCustom();
   caricaGiacenzeIniziali();
+  aggiornaAliasAnno(); // sincronizza giacenze e GI_* per l'anno corrente
 }
 
 // ===================== SALVA NEL FILE =====================
@@ -1325,13 +1395,7 @@ function salvaFile(){
 
 // ===================== BACKUP JSON =====================
 function esportaDati(){
-  var data={
-    versione:'3.0',
-    esportato:new Date().toISOString(),
-    lotti:lotti, vendite:vendite, giacenze:giacenze, carichi:carichi,
-    contrassegniCarichi:contrassegniCarichi, ricetteCustom:ricetteCustom,
-    anagrafica:anagrafica, scontriniGruppi:scontriniGruppi
-  };
+  var data=raccogliDatiExport();
   scaricaFile(JSON.stringify(data,null,2),'application/json',
     'liquorificio_backup_'+dataOggi()+'.json');
 }
@@ -1452,14 +1516,7 @@ function leggiImport(e){
     try{
       var d=JSON.parse(ev.target.result);
       if(confirm('Importare i dati? I dati attuali verranno sostituiti.')){
-        if(d.lotti) lotti=d.lotti;
-        if(d.vendite) vendite=d.vendite;
-        if(d.giacenze) giacenze=d.giacenze;
-        if(d.carichi) carichi=d.carichi;
-        if(d.contrassegniCarichi) contrassegniCarichi=d.contrassegniCarichi;
-        if(d.ricetteCustom) ricetteCustom=d.ricetteCustom;
-        if(d.anagrafica) anagrafica=d.anagrafica;
-        if(d.scontriniGruppi) scontriniGruppi=d.scontriniGruppi;
+        _applicaDati(d);
         salva(); renderAll();
       }
     }catch(err){alert('Il file selezionato non è valido o è corrotto.');}
@@ -1476,7 +1533,7 @@ function renderMetrics(){
     '<div class="metric"><div class="metric-label">Bottiglie totali</div><div class="metric-value">'+totB.toLocaleString('it')+'</div></div>'+
     '<div class="metric"><div class="metric-label">Litri in magazzino</div><div class="metric-value">'+totL.toFixed(1)+'</div></div>'+
     '<div class="metric accent"><div class="metric-label">Alcol anidro (giac.)</div><div class="metric-value">'+totA.toFixed(2)+'</div></div>'+
-    '<div class="metric"><div class="metric-label">Prossima VIA</div><div class="metric-value">'+prossimVia()+'</div><div class="metric-sub">'+lotti.length+' lotti registrati</div></div>';
+    '<div class="metric"><div class="metric-label">Prossima VIA</div><div class="metric-value">'+prossimVia()+'</div><div class="metric-sub">'+lotti.filter(function(l){var a=l.data?l.data.substring(0,4):'';return !a||a===annoCorrente;}).length+' VIA '+annoCorrente+'</div></div>';
 }
 
 function renderGiacenze(){
@@ -1548,7 +1605,10 @@ function renderLotti(){
   var el=document.getElementById('lista-lotti');
   if(!lotti.length){el.innerHTML='<div class="empty">— Nessun lotto registrato —</div>';return;}
 
-  var filtrati=[].concat(lotti).reverse().map(function(l,ri){ return {l:l, i:lotti.length-1-ri}; });
+  // Prima filtra per anno corrente (lotti senza data appartengono all'anno corrente)
+  var filtrati=[].concat(lotti).reverse().map(function(l,ri){ return {l:l, i:lotti.length-1-ri}; }).filter(function(x){
+    var a=x.l.data?x.l.data.substring(0,4):''; return !a||a===annoCorrente;
+  });
 
   if(fVia) filtrati=filtrati.filter(function(x){ return String(x.l.via||'').toLowerCase().indexOf(fVia)>=0; });
   if(fLotto) filtrati=filtrati.filter(function(x){ return x.l.prodotti.some(function(p){ return (p.lottoP||'').toLowerCase().indexOf(fLotto)>=0; }); });
@@ -1851,11 +1911,16 @@ function renderVendite(){
   var q=(document.getElementById('v-search')?document.getElementById('v-search').value.trim().toLowerCase():'');
   var qData=(document.getElementById('v-data-filter')?document.getElementById('v-data-filter').value:'');
   var html='';
-  var rev=[].concat(vendite).reverse();
+  // Filtra per anno corrente mantenendo l'indice originale
+  var rev=[];
+  for(var rj=vendite.length-1;rj>=0;rj--){
+    var va=vendite[rj].data?vendite[rj].data.substring(0,4):'';
+    if(!va||va===annoCorrente) rev.push({v:vendite[rj],i:rj});
+  }
   var trovati=0;
   for(var ri=0;ri<rev.length;ri++){
-    var v=rev[ri];
-    var i=vendite.length-1-ri;
+    var v=rev[ri].v;
+    var i=rev[ri].i;
     if(q){
       var haystack=(v.cliente||'').toLowerCase()+(v.numFattura||'').toLowerCase();
       if(haystack.indexOf(q)<0) continue;
@@ -1905,9 +1970,11 @@ function renderAlcol(){
   var al=(document.getElementById('alcol-al')?document.getElementById('alcol-al').value:'');
   var filtroInfo=document.getElementById('alcol-filtro-info');
 
-  // Filtra lotti per intervallo date
+  // Filtra lotti per anno corrente e intervallo date
   var lottiFiltrati=[].concat(lotti).reverse().filter(function(l){
     var d=l.data||'';
+    var a=d?d.substring(0,4):'';
+    if(a&&a!==annoCorrente) return false;
     if(dal && d && d<dal) return false;
     if(al && d && d>al) return false;
     return true;
@@ -3539,9 +3606,12 @@ function renderContrassegni(){
   var rows='';
   var conLen=contrassegniCarichi.length;
 
-  // Carichi — una riga per serie
+  // Carichi — una riga per serie (solo anno corrente)
   for(var ci2=conLen-1;ci2>=0;ci2--){
     var c=contrassegniCarichi[ci2];
+    // Filtra per anno corrente
+    var conAnnoC=c.data?c.data.substring(0,4):'';
+    if(conAnnoC&&conAnnoC!==annoCorrente) continue;
     var i2=ci2; // indice reale per eliminazione
     var serie=c.serie||[];
 
@@ -3655,8 +3725,8 @@ function renderContrassegni(){
     }
   }
 
-  // Utilizzi dai lotti (righe riepilogative)
-  var lottiRev=[].concat(lotti).reverse();
+  // Utilizzi dai lotti dell'anno corrente (righe riepilogative)
+  var lottiRev=[].concat(lotti).reverse().filter(function(l){var a=l.data?l.data.substring(0,4):'';return !a||a===annoCorrente;});
   for(var lri=0;lri<lottiRev.length;lri++){
     var lr=lottiRev[lri];
     for(var pri=0;pri<lr.prodotti.length;pri++){
@@ -4117,95 +4187,178 @@ function rcStampaPDF(){
   var m = d.m;
   var mPer = d.mPer;
 
-  function _n(v){ return parseFloat(v||0).toFixed(3).replace('.',','); }
+  function _n(v){ return parseFloat(v||0).toFixed(2).replace('.',','); }
+  function _n3(v){ return parseFloat(v||0).toFixed(3).replace('.',','); }
   function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-  // Costruisce HTML completo da aprire in nuova scheda
-  // Su Safari iOS: la pagina si apre → Condividi → Salva PDF
   var H = '<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8">';
   H += '<meta name="viewport" content="width=device-width,initial-scale=1">';
   H += '<title>Richiesta Contrassegni '+esc(d.gData||'')+'</title>';
   H += '<style>';
-  H += 'body{font-family:Arial,sans-serif;font-size:11px;color:#111;margin:20px;line-height:1.5}';
-  H += 'h1{font-size:14px;margin:0 0 2px}h2{font-size:12px;margin:12px 0 4px;border-bottom:1px solid #999;padding-bottom:2px}';
-  H += 'p{margin:2px 0}';
-  H += 'table{width:100%;border-collapse:collapse;margin-bottom:8px;font-size:10.5px}';
-  H += 'th{background:#f0ece4;font-weight:bold;text-align:left;padding:3px 5px;border:1px solid #ccc}';
-  H += 'td{padding:3px 5px;border:1px solid #ddd}';
-  H += '.tot td{font-weight:bold;background:#f8f5ef}';
-  H += '.num{text-align:right;font-family:monospace}';
-  H += '.hint{font-size:10px;color:#555;margin-top:6px;border:1px solid #bbb;padding:6px 8px;background:#fffbe8;border-radius:4px}';
-  H += '@media print{.hint{display:none}}';
+  H += '*{box-sizing:border-box}';
+  H += 'body{font-family:Arial,sans-serif;font-size:10.5px;color:#111;margin:24px 28px;line-height:1.45}';
+  H += 'h1{font-size:13px;margin:0 0 1px;font-weight:bold}';
+  H += 'p{margin:1px 0}';
+  H += 'hr{border:none;border-top:1px solid #555;margin:6px 0}';
+  H += '.titolo{font-size:15px;font-weight:bold;text-align:center;margin:8px 0 4px;letter-spacing:.05em}';
+  H += '.dichiarazione{font-size:10px;margin:6px 0 10px;line-height:1.5}';
+  H += 'table{border-collapse:collapse;margin-bottom:6px}';
+  H += 'th,td{border:1px solid #999;padding:2px 5px;font-size:10px}';
+  H += 'th{background:#e8e4dc;font-weight:bold;text-align:center}';
+  H += 'td{text-align:center}';
+  H += 'td.lbl{text-align:left}';
+  H += '.w100{width:100%}';
+  H += '.tot-row td{font-weight:bold;background:#f0ece0}';
+  H += '.chiede{font-size:13px;font-weight:bold;margin:10px 0;border:2px solid #333;padding:6px 10px;display:inline-block}';
+  H += '.hint{font-size:10px;color:#555;margin-top:8px;border:1px solid #bbb;padding:5px 8px;background:#fffbe8}';
+  H += '@media print{.hint{display:none}body{margin:10mm}}';
   H += '</style></head><body>';
 
-  // Intestazione
-  H += '<h1>NASTRO LIQUORI di GIANPIERO NASTRO</h1>';
-  H += '<p>Corso Trieste n°23 - 84018 - Scafati (Sa)</p>';
-  H += '<p>P.IVA: 05455470657 &nbsp;|&nbsp; C.F.: NSTGPR68R07C129V &nbsp;|&nbsp; UTF / Cod. Accise: SAX00379E</p>';
-  H += '<hr style="margin:8px 0">';
-  H += '<h2 style="font-size:13px;border:none">RICHIESTA CONTRASSEGNI DI STATO</h2>';
-  H += '<p>Data giacenza: <strong>'+esc(d.gData||'—')+'</strong> &nbsp;&nbsp; Periodo: <strong>'+esc(d.gDal||'...')+' &rarr; '+esc(d.gAl||'...')+'</strong></p>';
+  // INTESTAZIONE
+  H += '<h1>NASTRO LIQUORI di Gianpiero Nastro - Corso Trieste n°23 &ndash; 84018 &ndash; Scafati (Sa)</h1>';
+  H += '<p>P.Iva: 05455470657 &ndash; C.F.: NSTGPR68R07C129V &ndash; UTF / Cod. Accise: SAX00379E</p>';
+  H += '<hr>';
+  H += '<div class="titolo">RICHIESTA CONTRASSEGNI DI STATO</div>';
+  H += '<p class="dichiarazione">Il sottoscritto Gianpiero Nastro in qualit&agrave; di titolare del codice U.T.F. SAX00379E dichiara la giacenza dell\'alcool neutro e la giacenza dei contrassegni di Stato al '+esc(d.gData||'—')+'.<br>';
+  H += 'Inoltre dichiara le tipologie dei contrassegni di Stato riportati nel prospetto. In merito, allego F24 DI <span class="chiede">&euro; '+_n(d.totImp)+'</span></p>';
 
-  // Suggerimento per iOS
-  H += '<p class="hint">&#128236; Per salvare come PDF: tocca <strong>Condividi</strong> (&uarr;) &rarr; <strong>Stampa</strong> o <strong>Salva in File come PDF</strong></p>';
+  H += '<p class="hint">&#128236; Su iPhone: tocca Condividi (&uarr;) &rarr; Stampa, poi pizzica per ingrandire e Condividi &rarr; Salva in File</p>';
 
-  // PAG.1 — CONTRASSEGNI
-  H += '<h2>PAG. 1 — CONTRASSEGNI DA RICHIEDERE</h2>';
-  H += '<table><thead><tr><th>Tipo</th><th>Formato</th><th>Giac.M.</th><th class="num">Qt.</th><th class="num">L Anidri</th><th class="num">Importo</th></tr></thead><tbody>';
-  var hasQt=false;
+  // TABELLA CONTRASSEGNI — divisa per Tipologia A e C
+  H += '<p style="font-weight:bold;margin-top:8px">C H I E D E</p>';
+
+  // Tipologia A (formato 0,05L = indice 0)
+  var righeA = [], righeC = [];
   for(var i=0;i<RC_FMT.length;i++){
     if(!d.qtArr[i]) continue;
-    hasQt=true;
-    H += '<tr><td>'+esc(RC_TIPO[i])+'</td><td>'+esc(RC_FMT_L[i])+'</td><td class="num">'+RC_GM+'</td>';
-    H += '<td class="num">'+d.qtArr[i]+'</td><td class="num">'+_n(d.aniArr[i])+'</td>';
-    H += '<td class="num">&euro; '+d.impArr[i].toFixed(2).replace('.',',')+'</td></tr>';
+    if(RC_TIPO[i]==='A') righeA.push(i);
+    else righeC.push(i);
   }
-  if(!hasQt) H += '<tr><td colspan="6" style="color:#999;font-style:italic">(nessun contrassegno inserito)</td></tr>';
-  H += '</tbody><tfoot class="tot"><tr><td colspan="3">TOTALE</td>';
-  H += '<td class="num">'+d.totQt+'</td><td class="num">'+_n(d.totAni)+'</td>';
-  H += '<td class="num">&euro; '+d.totImp.toFixed(2).replace('.',',')+'</td></tr></tfoot></table>';
 
-  H += '<p>Alcol anidro disponibile: <strong>'+_n(d.anidriDisp)+'</strong> L</p>';
-  H += '<p>Alcol anidro richiesto: <strong>'+_n(d.totAni)+'</strong> L</p>';
-  H += '<p>Differenza: <strong>'+_n(d.anidriDisp-d.totAni)+'</strong> L</p>';
-  H += '<p style="margin-top:6px"><strong>Importo bonifico: &euro; '+d.totImp.toFixed(2).replace('.',',')+'</strong> (&euro; '+d.costo.toFixed(2)+' &times; '+d.totQt+' contrassegni)</p>';
+  function tabellaContrassegni(righe, tipo){
+    if(!righe.length) return '';
+    var t = '<table class="w100"><thead><tr>';
+    t += '<th>TIPOLOGIA '+tipo+'</th><th>Capacit&agrave; lt.</th><th>Quantit&agrave;</th><th>GIAC MEDIA</th></tr></thead><tbody>';
+    for(var ri=0;ri<righe.length;ri++){
+      var idx=righe[ri];
+      t += '<tr><td>'+esc(RC_TIPO[idx])+'</td><td>'+esc(RC_FMT_L[idx])+'</td>';
+      t += '<td>'+d.qtArr[idx]+'</td><td>'+RC_GM+'</td></tr>';
+    }
+    t += '</tbody></table>';
+    return t;
+  }
 
-  // PAG.1 — GIACENZA
-  H += '<h2>GIACENZA ALCOOL, CREME E AROMI</h2>';
-  H += '<table><thead><tr><th></th><th class="num">Alc Idr.</th><th class="num">Alc Ani.</th><th class="num">Cre Idr.</th><th class="num">Cre Ani.</th><th class="num">Aro Idr.</th><th class="num">Aro Ani.</th></tr></thead><tbody>';
+  if(!righeA.length && !righeC.length){
+    H += '<p style="color:#999;font-style:italic">(nessun contrassegno inserito nel composer)</p>';
+  } else {
+    if(righeA.length) H += tabellaContrassegni(righeA,'A');
+    if(righeC.length) H += tabellaContrassegni(righeC,'C');
+  }
+
+  // GIACENZA CONTRASSEGNI
+  H += '<p style="font-weight:bold;margin-top:10px">GIACENZA CONTRASSEGNI DI STATO AL '+esc(d.gDal||'...')+'/'+esc(d.gAl||'...')+'</p>';
+  H += '<table class="w100"><thead><tr>';
+  H += '<th></th>';
+  for(var fi=0;fi<RC_FMT.length;fi++) H += '<th>'+esc(RC_FMT_L[fi])+'</th>';
+  H += '</tr></thead><tbody>';
+  // riga CL (Capacità Lt)
+  H += '<tr><td class="lbl">CL</td>';
+  for(var fi2=0;fi2<RC_FMT.length;fi2++) H += '<td>'+esc(RC_FMT_L[fi2])+'</td>';
+  H += '</tr>';
+  // riga SERIE — mostriamo le serie distinte per formato
+  var seriePerFmt={};
+  for(var si=0;si<RC_SERIE.length;si++){
+    var sf=RC_SERIE[si];
+    var fk=String(sf.fmt||'');
+    if(!seriePerFmt[fk]) seriePerFmt[fk]=[];
+    seriePerFmt[fk].push(sf.serie||'');
+  }
+  H += '<tr><td class="lbl">SERIE</td>';
+  for(var fi3=0;fi3<RC_FMT.length;fi3++){
+    var fk3=String(RC_FMT[fi3]);
+    var nomi=(seriePerFmt[fk3]||[]).join(', ');
+    H += '<td>'+esc(nomi||'')+'</td>';
+  }
+  H += '</tr>';
+  // righe DA / A per ogni formato (prima serie trovata)
+  H += '<tr><td class="lbl">DA</td>';
+  for(var fi4=0;fi4<RC_FMT.length;fi4++){
+    var fk4=String(RC_FMT[fi4]);
+    var daVal=''; var aVal='';
+    for(var si2=0;si2<RC_SERIE.length;si2++){
+      if(String(RC_SERIE[si2].fmt||'')==fk4){ daVal=RC_SERIE[si2].da||''; aVal=RC_SERIE[si2].a||''; break; }
+    }
+    H += '<td>'+esc(daVal)+'</td>';
+  }
+  H += '</tr><tr><td class="lbl">A</td>';
+  for(var fi5=0;fi5<RC_FMT.length;fi5++){
+    var fk5=String(RC_FMT[fi5]);
+    var aVal2='';
+    for(var si3=0;si3<RC_SERIE.length;si3++){
+      if(String(RC_SERIE[si3].fmt||'')==fk5){ aVal2=RC_SERIE[si3].a||''; break; }
+    }
+    H += '<td>'+esc(aVal2)+'</td>';
+  }
+  H += '</tr>';
+  // Lt idrici / anidri per formato
+  var ltIdrFmt={}, ltAniFmt={};
+  for(var si4=0;si4<RC_SERIE.length;si4++){
+    var fk6=String(RC_SERIE[si4].fmt||'');
+    ltIdrFmt[fk6]=(ltIdrFmt[fk6]||0)+parseFloat(RC_SERIE[si4].ltIdr||0);
+    ltAniFmt[fk6]=(ltAniFmt[fk6]||0)+parseFloat(RC_SERIE[si4].ltAni||0);
+  }
+  H += '<tr><td class="lbl">Lt. IDRATI</td>';
+  for(var fi6=0;fi6<RC_FMT.length;fi6++){ var fk7=String(RC_FMT[fi6]); H += '<td>'+_n3(ltIdrFmt[fk7]||0)+'</td>'; }
+  H += '</tr><tr><td class="lbl">Lt. ANIDRI</td>';
+  for(var fi7=0;fi7<RC_FMT.length;fi7++){ var fk8=String(RC_FMT[fi7]); H += '<td>'+_n3(ltAniFmt[fk8]||0)+'</td>'; }
+  H += '</tr><tr><td class="lbl">GIAC MEDIA</td>';
+  for(var fi8=0;fi8<RC_FMT.length;fi8++) H += '<td>'+RC_GM+'</td>';
+  H += '</tr></tbody></table>';
+
+  // GIACENZA ALCOOL CREME AROMI
+  H += '<p style="font-weight:bold;margin-top:10px">GIACENZA ALCOOL, CREME E AROMI</p>';
+  H += '<table class="w100"><thead><tr><th></th>';
+  H += '<th colspan="2">ALCOL</th><th colspan="2">CREME</th><th colspan="2">AROMI</th></tr>';
+  H += '<tr><th></th><th>Litri Idr.</th><th>Litri Anidri</th><th>Litri Idr.</th><th>Litri Anidri</th><th>Litri Idr.</th><th>Litri Anidri</th></tr>';
+  H += '</thead><tbody>';
   function gRow(lbl,ai,aa,ci,ca,ri,ra){
-    H+='<tr><td>'+esc(lbl)+'</td><td class="num">'+_n(ai)+'</td><td class="num">'+_n(aa)+'</td><td class="num">'+_n(ci)+'</td><td class="num">'+_n(ca)+'</td><td class="num">'+_n(ri)+'</td><td class="num">'+_n(ra)+'</td></tr>';
+    H+='<tr><td class="lbl">'+esc(lbl)+'</td><td>'+_n3(ai)+'</td><td>'+_n3(aa)+'</td><td>'+_n3(ci)+'</td><td>'+_n3(ca)+'</td><td>'+_n3(ri)+'</td><td>'+_n3(ra)+'</td></tr>';
   }
-  gRow('Giacenza al '+(d.gData||'—'), m.gAlcI,m.gAlcA, m.gCreI,m.gCreA, m.gAroI,m.gAroA);
-  gRow('+ Introdotto', mPer.aqAlcI,mPer.aqAlcA, mPer.aqCreI,mPer.aqCreA, mPer.aqAroI,mPer.aqAroA);
-  gRow('- Impiegato', mPer.coAlcI,mPer.coAlcA, mPer.coCreI,mPer.coCreA, mPer.coAroI,mPer.coAroA);
+  gRow('Giacenza al '+esc(d.gData||'—'), m.gAlcI,m.gAlcA, m.gCreI,m.gCreA, m.gAroI,m.gAroA);
+  gRow('Introdotto al '+esc(d.gDal||'...')+'/'+esc(d.gAl||'...'), mPer.aqAlcI,mPer.aqAlcA, mPer.aqCreI,mPer.aqCreA, mPer.aqAroI,mPer.aqAroA);
+  gRow('Impiegato al '+esc(d.gDal||'...')+'/'+esc(d.gAl||'...'), mPer.coAlcI,mPer.coAlcA, mPer.coCreI,mPer.coCreA, mPer.coAroI,mPer.coAroA);
   gRow('Totale carico', mPer.aqAlcI-mPer.coAlcI,mPer.aqAlcA-mPer.coAlcA, mPer.aqCreI-mPer.coCreI,mPer.aqCreA-mPer.coCreA, mPer.aqAroI-mPer.coAroI,mPer.aqAroA-mPer.coAroA);
-  gRow('Giacenza fine periodo', m.gAlcI,m.gAlcA, m.gCreI,m.gCreA, m.gAroI,m.gAroA);
+  gRow('Giacenza al '+esc(d.gData||'—'), m.gAlcI,m.gAlcA, m.gCreI,m.gCreA, m.gAroI,m.gAroA);
   H += '</tbody></table>';
 
-  // PAG.2 — SERIE APPLICATE
+  // Firma
+  H += '<p style="margin-top:16px">Nastro Liquori di Gianpiero Nastro Cod. Accise: SAX00379E</p>';
+
+  // PAG.2 — SERIE APPLICATE (solo se presenti)
   if(RC_SERIE.length){
-    H += '<h2>PAG. 2 — CONTRASSEGNI APPLICATI — SERIE</h2>';
-    H += '<table><thead><tr><th>Serie</th><th>Formato</th><th class="num">Da</th><th class="num">A</th><th class="num">Lt. Idrici</th><th class="num">Lt. Anidri</th><th class="num">Gr.Med</th></tr></thead><tbody>';
+    H += '<div style="page-break-before:always;padding-top:16px">';
+    H += '<div class="titolo" style="font-size:13px">PAG. 2 — CONTRASSEGNI DI STATO APPLICATI — SERIE</div>';
+    H += '<table class="w100" style="margin-top:8px"><thead><tr>';
+    H += '<th>TIPOLOGIA CL</th><th>SERIE</th><th>DA</th><th>A</th><th>Lt. IDRATI</th><th>Lt. ANIDRI</th><th>GR. MEDIA</th></tr></thead><tbody>';
     var totI2=0, totA2=0;
     for(var j=0;j<RC_SERIE.length;j++){
       var sr=RC_SERIE[j];
       var li2=parseFloat(sr.ltIdr)||0; var la2=parseFloat(sr.ltAni)||0;
       totI2+=li2; totA2+=la2;
-      H += '<tr><td>'+esc(sr.serie||'—')+'</td><td>'+esc(sr.fmtLabel||sr.fmt||'—')+'</td>';
-      H += '<td class="num">'+esc(sr.da||'—')+'</td><td class="num">'+esc(sr.a||'—')+'</td>';
-      H += '<td class="num">'+_n(li2)+'</td><td class="num">'+_n(la2)+'</td><td class="num">'+esc(sr.grMedia||22)+'</td></tr>';
+      H += '<tr><td>'+esc(sr.fmtLabel||sr.fmt||'—')+'</td><td>'+esc(sr.serie||'—')+'</td>';
+      H += '<td>'+esc(sr.da||'—')+'</td><td>'+esc(sr.a||'—')+'</td>';
+      H += '<td>'+_n3(li2)+'</td><td>'+_n3(la2)+'</td><td>'+esc(sr.grMedia||22)+'</td></tr>';
     }
-    H += '</tbody><tfoot class="tot"><tr><td colspan="4">TOTALE</td>';
-    H += '<td class="num">'+_n(totI2)+'</td><td class="num">'+_n(totA2)+'</td><td></td></tr></tfoot></table>';
+    H += '</tbody><tfoot><tr class="tot-row"><td colspan="4">TOTALE</td>';
+    H += '<td>'+_n3(totI2)+'</td><td>'+_n3(totA2)+'</td><td></td></tr></tfoot></table>';
+    H += '</div>';
   }
 
   H += '</body></html>';
 
-  // Apre in nuova scheda — Safari iOS permette window.open() da evento tap
   var w = window.open('','_blank');
   if(w){ w.document.write(H); w.document.close(); }
-  else { alert('Il browser ha bloccato la nuova finestra. Abilita i popup per questo sito.'); }
+  else { alert('Abilita i popup per fnliq.github.io e riprova.'); }
 }
 
 // ===================== RANGE CONTRASSEGNI =====================
@@ -4418,9 +4571,11 @@ function salvaCarico(){
 }
 
 function eliminaCarico(i){
-  var sorted=[].concat(carichi).reverse();var c=sorted[i];var ri=carichi.indexOf(c);
+  // i è l'indice reale nell'array carichi (non reversed)
+  var c=carichi[i];
+  if(!c){alert('Carico non trovato');return;}
   if(!confirm('Eliminare carico DDT '+(c.ddt||'senza numero')+' da '+c.fornitore+'?'))return;
-  carichi.splice(ri,1);salva();renderCarichi();
+  carichi.splice(i,1);salva();renderCarichi();
 }
 
 function renderCarichi(){
@@ -4431,8 +4586,14 @@ function renderCarichi(){
   var tipoLabel={alcol:'Alcol puro',creme:'Creme 17°',aromi:'Aromi'};
   var tipoBadge={alcol:'alc-t',creme:'cre-t',aromi:'aro-t'};
   var html='';
-  [].concat(carichi).reverse().forEach(function(c,ri){
-    var i=carichi.length-1-ri;
+  // Filtra per anno corrente mantenendo l'indice originale
+  var carichiRev=[];
+  for(var rcj=carichi.length-1;rcj>=0;rcj--){
+    var cAnnoR=carichi[rcj].data?carichi[rcj].data.substring(0,4):'';
+    if(!cAnnoR||cAnnoR===annoCorrente) carichiRev.push({c:carichi[rcj],i:rcj});
+  }
+  carichiRev.forEach(function(cr){
+    var c=cr.c; var i=cr.i;
     if(q){
       var hay=(c.fornitore||'').toLowerCase()+(c.ddt||'').toLowerCase();
       if(hay.indexOf(q)<0) return;
@@ -4460,25 +4621,30 @@ function renderCarichi(){
 }
 
 // ===================== MAGAZZINO =====================
+// GI_ALCOL/AROMI/CREME sono alias per l'anno corrente — gestiti da aggiornaAliasAnno()
 var GI_ALCOL={idr:117.000,ani:111.931};
 var GI_AROMI={idr:152.092,ani:99.311};
 var GI_CREME={idr:123.780,ani:21.099};
 
 function salvaGiacenzeIniziali(){
-  try{
-    localStorage.setItem('liq_gi_alcol',JSON.stringify(GI_ALCOL));
-    localStorage.setItem('liq_gi_aromi',JSON.stringify(GI_AROMI));
-    localStorage.setItem('liq_gi_creme',JSON.stringify(GI_CREME));
-  }catch(e){}
+  // Salva nell'oggetto per anno
+  if(!giacenzeAlcolPerAnno[annoCorrente]) giacenzeAlcolPerAnno[annoCorrente]={};
+  giacenzeAlcolPerAnno[annoCorrente].alcol={idr:GI_ALCOL.idr,ani:GI_ALCOL.ani};
+  giacenzeAlcolPerAnno[annoCorrente].aromi={idr:GI_AROMI.idr,ani:GI_AROMI.ani};
+  giacenzeAlcolPerAnno[annoCorrente].creme={idr:GI_CREME.idr,ani:GI_CREME.ani};
   salva();
 }
+
 function caricaGiacenzeIniziali(){
-  if(_DATI_INCORPORATI){
-    if(_DATI_INCORPORATI.GI_ALCOL) GI_ALCOL=_DATI_INCORPORATI.GI_ALCOL;
-    if(_DATI_INCORPORATI.GI_AROMI) GI_AROMI=_DATI_INCORPORATI.GI_AROMI;
-    if(_DATI_INCORPORATI.GI_CREME) GI_CREME=_DATI_INCORPORATI.GI_CREME;
+  // Prima controlla se già gestito dalla nuova struttura (da _applicaDati)
+  if(giacenzeAlcolPerAnno[annoCorrente]){
+    var ga=giacenzeAlcolPerAnno[annoCorrente];
+    if(ga.alcol) GI_ALCOL=ga.alcol;
+    if(ga.aromi) GI_AROMI=ga.aromi;
+    if(ga.creme) GI_CREME=ga.creme;
     return;
   }
+  // Migrazione: leggi le vecchie chiavi localStorage
   try{
     var a=localStorage.getItem('liq_gi_alcol');
     var r=localStorage.getItem('liq_gi_aromi');
@@ -4486,18 +4652,31 @@ function caricaGiacenzeIniziali(){
     if(a) GI_ALCOL=JSON.parse(a);
     if(r) GI_AROMI=JSON.parse(r);
     if(c) GI_CREME=JSON.parse(c);
+    // Migra nella nuova struttura se trovate
+    if(a||r||c){
+      if(!giacenzeAlcolPerAnno[annoCorrente]) giacenzeAlcolPerAnno[annoCorrente]={};
+      giacenzeAlcolPerAnno[annoCorrente].alcol={idr:GI_ALCOL.idr,ani:GI_ALCOL.ani};
+      giacenzeAlcolPerAnno[annoCorrente].aromi={idr:GI_AROMI.idr,ani:GI_AROMI.ani};
+      giacenzeAlcolPerAnno[annoCorrente].creme={idr:GI_CREME.idr,ani:GI_CREME.ani};
+    }
   }catch(e){}
 }
 
 function calcolaMagazzino(){
   var aqAlcI=0,aqAlcA=0,aqAroI=0,aqAroA=0,aqCreI=0,aqCreA=0;
   carichi.forEach(function(c){
+    // Filtra per anno corrente
+    var cAnno=c.data?c.data.substring(0,4):'';
+    if(cAnno&&cAnno!==annoCorrente) return;
     if(c.tipo==='alcol'){aqAlcI+=c.idr;aqAlcA+=c.ani;}
     else if(c.tipo==='aromi'){aqAroI+=c.idr;aqAroA+=c.ani;}
     else if(c.tipo==='creme'){aqCreI+=c.idr;aqCreA+=c.ani;}
   });
   var coAlcI=0,coAlcA=0,coAroI=0,coAroA=0,coCreI=0,coCreA=0;
   lotti.forEach(function(l){
+    // Filtra per anno corrente
+    var lAnno=l.data?l.data.substring(0,4):'';
+    if(lAnno&&lAnno!==annoCorrente) return;
     var g=calcolaLottoIngr(l);
     coAlcI+=g.alc_idr;coAlcA+=g.alc_ani;
     coAroI+=g.aro_idr;coAroA+=g.aro_ani;
@@ -4513,6 +4692,9 @@ function calcolaMagazzinoFiltrato(dal,al){
   var aqAlcI=0,aqAlcA=0,aqAroI=0,aqAroA=0,aqCreI=0,aqCreA=0;
   carichi.forEach(function(c){
     var d=c.data||'';
+    // Filtra per anno corrente
+    var cAnno=d?d.substring(0,4):'';
+    if(cAnno&&cAnno!==annoCorrente) return;
     if(dal && d && d<dal) return;
     if(al && d && d>al) return;
     if(c.tipo==='alcol'){aqAlcI+=c.idr;aqAlcA+=c.ani;}
@@ -4522,6 +4704,9 @@ function calcolaMagazzinoFiltrato(dal,al){
   var coAlcI=0,coAlcA=0,coAroI=0,coAroA=0,coCreI=0,coCreA=0;
   lotti.forEach(function(l){
     var d=l.data||'';
+    // Filtra per anno corrente
+    var lAnno=d?d.substring(0,4):'';
+    if(lAnno&&lAnno!==annoCorrente) return;
     if(dal && d && d<dal) return;
     if(al && d && d>al) return;
     var g=calcolaLottoIngr(l);
@@ -4640,6 +4825,91 @@ function renderMagazzino(){
     totHtml+='</tr>';
   }
   document.getElementById('tb-mag-totale').innerHTML=totHtml;
+}
+
+// ===================== GESTIONE MULTI-ANNO =====================
+
+// Calcola le giacenze finali di tutti i prodotti (giacenze correnti)
+function calcolaGiacenzeFinali(){
+  var fin={};
+  Object.keys(giacenze).forEach(function(p){
+    fin[p]={grado:giacenze[p].grado, qt:giacenze[p].qt.slice()};
+  });
+  return fin;
+}
+
+// Calcola le giacenze finali del magazzino alcol per l'anno corrente
+function calcolaGiacenzeAlcolFinali(){
+  var m=calcolaMagazzino();
+  return {
+    alcol:{idr:m.gAlcI, ani:m.gAlcA},
+    aromi:{idr:m.gAroI, ani:m.gAroA},
+    creme:{idr:m.gCreI, ani:m.gCreA}
+  };
+}
+
+// Chiudi l'esercizio corrente: le giacenze finali diventano iniziali dell'anno successivo
+function chiudiEsercizio(){
+  try{
+    var annoChiusura=annoCorrente;
+    var annoNuovo=String(parseInt(annoChiusura)+1);
+
+    // Calcola giacenze finali PRIMA del confirm (evita problemi con dialog multipli)
+    var gFin=calcolaGiacenzeFinali();
+    var gaFin=calcolaGiacenzeAlcolFinali();
+
+    // Un solo confirm che copre tutto
+    var haGiaAnno=(giacenzePerAnno[annoNuovo]&&Object.keys(giacenzePerAnno[annoNuovo]).length>0);
+    var msg='Chiudere esercizio '+annoChiusura+'?\n\n';
+    msg+='Le giacenze finali del '+annoChiusura+' diventeranno le giacenze iniziali del '+annoNuovo+'.\n';
+    msg+='L\'anno corrente verrà impostato a '+annoNuovo+'.';
+    if(haGiaAnno) msg+='\n\n⚠️ Attenzione: l\'anno '+annoNuovo+' ha già giacenze iniziali che verranno sovrascritte.';
+    if(!confirm(msg)) return;
+
+    // Salva le giacenze finali come giacenze iniziali del nuovo anno
+    giacenzePerAnno[annoNuovo]=gFin;
+    if(!giacenzeAlcolPerAnno[annoNuovo]) giacenzeAlcolPerAnno[annoNuovo]={};
+    giacenzeAlcolPerAnno[annoNuovo].alcol=gaFin.alcol;
+    giacenzeAlcolPerAnno[annoNuovo].aromi=gaFin.aromi;
+    giacenzeAlcolPerAnno[annoNuovo].creme=gaFin.creme;
+
+    // Cambia anno corrente
+    annoCorrente=annoNuovo;
+    aggiornaAliasAnno();
+
+    salva();
+    renderAll();
+    alert('✓ Esercizio '+annoChiusura+' chiuso.\nAnno corrente: '+annoNuovo+'\nGiacenze iniziali impostate automaticamente.');
+  }catch(e){
+    alert('Errore durante la chiusura esercizio:\n'+e.message);
+    console.error('chiudiEsercizio error:',e);
+  }
+}
+
+// Cambia anno visualizzato (senza chiudere l'esercizio)
+function cambiaAnno(anno){
+  if(!anno) return;
+  annoCorrente=anno;
+  if(!giacenzePerAnno[annoCorrente]) giacenzePerAnno[annoCorrente]={};
+  aggiornaAliasAnno();
+  salva();
+  renderAll();
+}
+
+// Aggiorna il select anno nel tab magazzino
+function aggiornaSelectAnno(){
+  var sel=document.getElementById('sel-anno-corrente');
+  if(!sel) return;
+  var anni=Object.keys(giacenzePerAnno).sort();
+  if(anni.indexOf(annoCorrente)<0) anni.push(annoCorrente);
+  anni.sort();
+  sel.innerHTML='';
+  anni.forEach(function(a){
+    var opt=document.createElement('option');
+    opt.value=a; opt.textContent=a;
+    if(a===annoCorrente) opt.selected=true;
+    sel.appendChild(opt);
+  });
 }
 
 // ===================== TAB SWITCHING =====================
@@ -5105,7 +5375,7 @@ function renderScontrini(){
   };
 }
 
-function renderAll(){renderHome();renderGiacenze();renderLotti();renderVendite();renderAnagrafica();}
+function renderAll(){aggiornaSelectAnno();renderHome();renderGiacenze();renderLotti();renderVendite();renderAnagrafica();}
 
 // ===================== HOME =====================
 function renderHome(){
@@ -5131,26 +5401,36 @@ function renderHome(){
   var giac=giacenzaContrassegni();
   var totCon=giac.reduce(function(a,b){return a+b;},0);
   var prossVia=prossimVia();
+  // Conteggi filtrati per anno corrente (per le statistiche card)
+  var lottiAnno=lotti.filter(function(l){var a=l.data?l.data.substring(0,4):''; return !a||a===annoCorrente;});
+  var carichiAnno=carichi.filter(function(c){var a=c.data?c.data.substring(0,4):''; return !a||a===annoCorrente;});
+  var venditeAnno=vendite.filter(function(v){var a=v.data?v.data.substring(0,4):''; return !a||a===annoCorrente;});
+  var conCarichiAnno=contrassegniCarichi.filter(function(c){var a=c.data?c.data.substring(0,4):''; return !a||a===annoCorrente;});
 
-  // Totale contrassegni caricati (non disponibili, totali)
+  // Totale contrassegni caricati (non disponibili, totali) — solo anno corrente
   var totConCaricati=0;
   contrassegniCarichi.forEach(function(c){
+    var cAnno=c.data?c.data.substring(0,4):'';
+    if(cAnno&&cAnno!==annoCorrente) return;
     (c.serie||[]).forEach(function(s){totConCaricati+=s.a-s.da+1;});
   });
 
-  // Alcol anidro totale prodotto (da tutti i lotti)
+  // Alcol anidro totale prodotto (solo lotti anno corrente)
   var totAlcAniProdotto=0;
   lotti.forEach(function(l){
+    var lAnno=l.data?l.data.substring(0,4):'';
+    if(lAnno&&lAnno!==annoCorrente) return;
     var g=calcolaLottoIngr(l);
     totAlcAniProdotto+=g.alc_ani;
   });
 
   var kpiEl=document.getElementById('home-kpi');
   if(kpiEl) kpiEl.innerHTML=
+    '<div class="home-kpi" style="border-color:var(--gold);background:linear-gradient(135deg,#fffbf0,#fff)"><div class="home-kpi-val" style="color:var(--gold);font-size:28px">'+annoCorrente+'</div><div class="home-kpi-label">Anno di esercizio</div><div class="home-kpi-sub" style="cursor:pointer;color:var(--green);text-decoration:underline" onclick="document.querySelector(\'.tab[onclick*=magazzino]\').click()">Cambia anno →</div></div>'+
     '<div class="home-kpi"><div class="home-kpi-val">'+kpiBottiglie.toLocaleString('it')+'</div><div class="home-kpi-label">Bottiglie in stock</div><div class="home-kpi-sub">'+kpiLitri.toFixed(1)+' litri</div></div>'+
-    '<div class="home-kpi"><div class="home-kpi-val" style="color:var(--gold)">'+prossVia+'</div><div class="home-kpi-label">Prossima VIA</div><div class="home-kpi-sub">'+lotti.length+' VIA registrate</div></div>'+
+    '<div class="home-kpi"><div class="home-kpi-val" style="color:var(--gold)">'+prossVia+'</div><div class="home-kpi-label">Prossima VIA</div><div class="home-kpi-sub">'+lottiAnno.length+' VIA '+annoCorrente+'</div></div>'+
     '<div class="home-kpi"><div class="home-kpi-val" style="color:var(--green);font-size:22px">'+m.gAlcI.toFixed(1)+' L</div><div class="home-kpi-label">Alcol disponibile</div><div class="home-kpi-sub">Anidro: '+m.gAlcA.toFixed(1)+' L</div></div>'+
-    '<div class="home-kpi"><div class="home-kpi-val" style="color:var(--purple)">'+totCon+'</div><div class="home-kpi-label">Contrassegni disp.</div><div class="home-kpi-sub">'+contrassegniCarichi.length+' carichi</div></div>'+
+    '<div class="home-kpi"><div class="home-kpi-val" style="color:var(--purple)">'+totCon+'</div><div class="home-kpi-label">Contrassegni disp.</div><div class="home-kpi-sub">'+conCarichiAnno.length+' carichi '+annoCorrente+'</div></div>'+
     '<div class="home-kpi"><div class="home-kpi-val" style="color:var(--amber);font-size:22px">'+m.gAroI.toFixed(1)+' L</div><div class="home-kpi-label">Aromi disponibili</div><div class="home-kpi-sub">Anidro: '+m.gAroA.toFixed(1)+' L</div></div>'+
     '<div class="home-kpi"><div class="home-kpi-val" style="color:var(--rose);font-size:22px">'+m.gCreI.toFixed(1)+' L</div><div class="home-kpi-label">Creme disponibili</div><div class="home-kpi-sub">Anidro: '+m.gCreA.toFixed(1)+' L</div></div>';
 
@@ -5192,13 +5472,13 @@ function renderHome(){
   // ---- Statistiche card ----
   var allR=tutteRicette();
   function setEl(id,txt){var el=document.getElementById(id);if(el)el.textContent=txt;}
-  setEl('hs-lotti', lotti.length ? lotti.length+' VIA — ultima: VIA '+Math.max.apply(null,lotti.map(function(l){return parseInt(l.via);})) : 'Nessuna VIA registrata');
+  setEl('hs-lotti', lottiAnno.length ? lottiAnno.length+' VIA — ultima: VIA '+Math.max.apply(null,lottiAnno.map(function(l){return parseInt(l.via);})) : 'Nessuna VIA registrata');
   setEl('hs-ricette', Object.keys(allR).length+' ricette ('+Object.keys(ricetteCustom).length+' custom)');
-  setEl('hs-alcol', lotti.length ? lotti.length+' lotti — Anidro tot: '+totAlcAniProdotto.toFixed(2)+' L' : ' ');
+  setEl('hs-alcol', lottiAnno.length ? lottiAnno.length+' lotti — Anidro tot: '+totAlcAniProdotto.toFixed(2)+' L' : ' ');
   setEl('hs-giacenze', kpiBottiglie+' bottiglie · '+kpiLitri.toFixed(1)+' L');
   setEl('hs-magazzino', 'Alcol: '+m.gAlcI.toFixed(1)+' L · Aromi: '+m.gAroI.toFixed(1)+' L');
-  setEl('hs-carichi', carichi.length ? carichi.length+' DDT registrati' : 'Nessun acquisto registrato');
-  setEl('hs-vendite', vendite.length ? vendite.length+' vendite registrate' : 'Nessuna vendita');
+  setEl('hs-carichi', carichiAnno.length ? carichiAnno.length+' DDT registrati' : 'Nessun acquisto registrato');
+  setEl('hs-vendite', venditeAnno.length ? venditeAnno.length+' vendite registrate' : 'Nessuna vendita');
   setEl('hs-contrassegni', totCon+' disponibili su '+totConCaricati);
   var nCli=anagrafica.filter(function(a){return a.tipo==='cliente'||a.tipo==='entrambi';}).length;
   var nFor=anagrafica.filter(function(a){return a.tipo==='fornitore'||a.tipo==='entrambi';}).length;
@@ -5215,7 +5495,10 @@ function supportaFileSystemAPI(){
 
 // Genera l'HTML aggiornato con i dati incorporati
 function generaHtmlAggiornato(){
-  var dati={lotti:lotti,vendite:vendite,giacenze:giacenze,
+  giacenzePerAnno[annoCorrente]=giacenze; // sincronizza alias
+  var dati={annoCorrente:annoCorrente,giacenzePerAnno:giacenzePerAnno,
+    giacenzeAlcolPerAnno:giacenzeAlcolPerAnno,
+    lotti:lotti,vendite:vendite,
     carichi:carichi,contrassegniCarichi:contrassegniCarichi,ricetteCustom:ricetteCustom,
     anagrafica:anagrafica,scontriniGruppi:scontriniGruppi};
   var html=document.documentElement.outerHTML;
@@ -5298,15 +5581,7 @@ async function apriFile(){
       }
     }
     if(datiEstratti){
-      var dati=datiEstratti;
-      if(dati.lotti) lotti=dati.lotti;
-      if(dati.vendite) vendite=dati.vendite;
-      if(dati.giacenze) giacenze=dati.giacenze;
-      if(dati.carichi) carichi=dati.carichi;
-      if(dati.contrassegniCarichi) contrassegniCarichi=dati.contrassegniCarichi;
-      if(dati.ricetteCustom) ricetteCustom=dati.ricetteCustom;
-      if(dati.anagrafica) anagrafica=dati.anagrafica;
-      if(dati.scontriniGruppi) scontriniGruppi=dati.scontriniGruppi;
+      _applicaDati(datiEstratti);
       _modificheNonSalvate=0;
       salva(); renderAll();
       aggiornaIndicatoreSalvataggio();
@@ -5471,10 +5746,14 @@ function salvaImpostazioniGist(){
 }
 
 function raccogliDatiExport(){
+  giacenzePerAnno[annoCorrente]=giacenze; // sincronizza alias
   return {
-    versione:'3.0',
+    versione:'4.0',
     esportato:new Date().toISOString(),
-    lotti:lotti, vendite:vendite, giacenze:giacenze, carichi:carichi,
+    annoCorrente:annoCorrente,
+    giacenzePerAnno:giacenzePerAnno,
+    giacenzeAlcolPerAnno:giacenzeAlcolPerAnno,
+    lotti:lotti, vendite:vendite, carichi:carichi,
     contrassegniCarichi:contrassegniCarichi, ricetteCustom:ricetteCustom,
     anagrafica:anagrafica, scontriniGruppi:scontriniGruppi
   };
@@ -5548,14 +5827,7 @@ function caricaDaGist(callback){
 }
 
 function applicaDatiGist(d){
-  if(d.lotti) lotti=d.lotti;
-  if(d.vendite) vendite=d.vendite;
-  if(d.giacenze) giacenze=d.giacenze;
-  if(d.carichi) carichi=d.carichi;
-  if(d.contrassegniCarichi) contrassegniCarichi=d.contrassegniCarichi;
-  if(d.ricetteCustom) ricetteCustom=d.ricetteCustom;
-  if(d.anagrafica) anagrafica=d.anagrafica;
-  if(d.scontriniGruppi) scontriniGruppi=d.scontriniGruppi;
+  _applicaDati(d);
   salva();
   renderAll();
 }
