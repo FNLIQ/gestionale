@@ -1855,10 +1855,30 @@ var FMT=[0.05,0.10,0.20,0.50,0.70,1.00,2.00];
 var FMT_L=["0,05L","0,10L","0,20L","0,50L","0,70L","1L","2L"];
 
 function dn(k){return NOMI_DISPLAY[k]||k;}
+// Data di oggi in ora locale (YYYY-MM-DD) — toISOString() usa l'ora UTC
+function oggiISO(){var d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+// Testo utente sicuro dentro innerHTML
+function escHtml(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+// Controlla la giacenza sommando le righe dello stesso prodotto/formato. Ritorna messaggio d'errore o null.
+function verificaGiacenzaAggregata(prodotti){
+  var tot={};
+  prodotti.forEach(function(p){var k=p.nome+'|'+p.fmt;tot[k]=(tot[k]||0)+p.qt;});
+  for(var k in tot){
+    var nome=k.split('|')[0], fmt=parseFloat(k.split('|')[1]);
+    if(!giacenze[nome]) return 'Prodotto senza giacenza nell\'anno '+annoCorrente+': '+dn(nome);
+    var fi=FMT.indexOf(fmt);
+    if(fi<0) return 'Formato non valido: '+fmt+'L';
+    if(giacenze[nome].qt[fi]<tot[k]) return 'Giacenza insufficiente: '+dn(nome)+' '+fmt+'L - Disponibili: '+giacenze[nome].qt[fi]+', richiesti: '+tot[k];
+  }
+  return null;
+}
 
 function calcRicetta(nome,lt,override){
-  var all=tutteRicette();
-  var r=all[nome]; if(!r||lt<=0) return null;
+  return calcRicettaDa(tutteRicette()[nome],lt,override);
+}
+// Calcolo a partire da una ricetta data (es. quella "fotografata" nella VIA)
+function calcRicettaDa(r,lt,override){
+  if(!r||lt<=0) return null;
   // override = {alc_idr, cre_idr} per ricetta personalizzata sul VIA
   var alc_idr = (override&&override.alc_idr!=null) ? override.alc_idr : r.alc*lt;
   var cre_idr = (override&&override.cre_idr!=null) ? override.cre_idr : r.cre*lt;
@@ -1887,6 +1907,7 @@ var contrassegniCarichi=[]; // [{data, doc, note, qt:[7]}]
 var ricetteCustom={};
 var ricettaSel=null;
 var _editingViaIdx=null;
+var _editingViaRef=null; // la VIA in modifica (riferimento: resta valido anche se l'array cambia)
 var _editingVenditaIdx=null;
 var _modificheNonSalvate=0;
 var _overrideAttivo=false;
@@ -1967,7 +1988,54 @@ function giacenzaContrassegni(){
 }
 
 // ===================== SALVATAGGIO =====================
-function salva(){
+// ── Stato sincronizzazione Gist ──
+// 'liq_sync_pendente' = '1' finché le ultime modifiche locali non sono arrivate sul Gist.
+// All'avvio, se è '1', NON si scaricano i dati dal Gist (sarebbero più vecchi):
+// si inviano invece i dati locali.
+var _versioneDati=0, _avvisoStorageMostrato=false;
+function _syncPendente(){ try{ return localStorage.getItem('liq_sync_pendente')==='1'; }catch(e){ return false; } }
+function _setSyncPendente(v){ try{ if(v) localStorage.setItem('liq_sync_pendente','1'); else localStorage.removeItem('liq_sync_pendente'); }catch(e){} }
+// Piccolo avviso in basso a destra: sparisce da solo se ok, resta visibile se c'è un problema
+function _mostraStatoSync(ok,msg){
+  var ind=document.getElementById('sync-toast');
+  if(!ind){
+    ind=document.createElement('div');
+    ind.id='sync-toast';
+    ind.style.cssText='position:fixed;bottom:18px;right:18px;max-width:calc(100% - 36px);padding:9px 16px;border-radius:10px;font-size:12px;z-index:998;background:var(--ink);color:var(--bg);box-shadow:var(--shadow-lg);transition:opacity .3s;opacity:0;cursor:pointer';
+    ind.title='Chiudi';
+    ind.onclick=function(){ind.style.opacity='0';};
+    document.body.appendChild(ind);
+  }
+  clearTimeout(ind._t);
+  ind.textContent=msg;
+  ind.style.border='1px solid '+(ok?'var(--gold)':'#e07b5a');
+  ind.style.opacity='1';
+  if(ok) ind._t=setTimeout(function(){ind.style.opacity='0';},2200);
+}
+// Invia i dati locali al Gist. cb(ok, messaggio)
+function _inviaGist(cb){
+  var c=gistConf();
+  if(!c.id||!c.token){ if(cb) cb(false,'Gist non configurato'); return; }
+  var versioneInviata=_versioneDati;
+  var payload={}; payload[c.file]={"content":JSON.stringify(raccogliDatiExport(),null,2)};
+  var xhr=new XMLHttpRequest();
+  xhr.open('PATCH','https://api.github.com/gists/'+c.id);
+  xhr.setRequestHeader('Authorization','token '+c.token);
+  xhr.setRequestHeader('Accept','application/vnd.github.v3+json');
+  xhr.setRequestHeader('Content-Type','application/json');
+  xhr.onload=function(){
+    if(xhr.status===200){
+      // Togli il flag solo se nel frattempo non ci sono state altre modifiche
+      if(_versioneDati===versioneInviata) _setSyncPendente(false);
+      if(cb) cb(true);
+    } else {
+      if(cb) cb(false,'Errore GitHub ('+xhr.status+')'+(xhr.status===401?': token non valido o scaduto':''));
+    }
+  };
+  xhr.onerror=function(){ if(cb) cb(false,'Nessuna connessione'); };
+  xhr.send(JSON.stringify({"files":payload}));
+}
+function salva(daGist){
   // Sincronizza l'alias prima di salvare
   giacenzePerAnno[annoCorrente]=giacenze;
   try{
@@ -1981,28 +2049,28 @@ function salva(){
     localStorage.setItem('liq_anagrafica',JSON.stringify(anagrafica));
     localStorage.setItem('liq_scontrini',JSON.stringify(scontriniGruppi));
     localStorage.setItem('liq_alcol_per_anno',JSON.stringify(giacenzeAlcolPerAnno));
-  }catch(e){}
+  }catch(e){
+    // Prima era silenzioso: se il browser non salva, i dati restano solo in memoria
+    if(!_avvisoStorageMostrato){
+      _avvisoStorageMostrato=true;
+      alert('⚠ Il browser non riesce a salvare i dati in locale ('+e.name+').\nFai subito un Backup JSON per non perderli.');
+    }
+  }
+  if(daGist===true) return; // dati appena scaricati dal Gist: niente da reinviare
   _modificheNonSalvate++;
+  _versioneDati++;
   aggiornaIndicatoreSalvataggio();
-  // Auto-sync Gist in background (silenzioso, non blocca)
+  var c0=gistConf();
+  if(!c0.id||!c0.token) return;
+  _setSyncPendente(true);
+  // Auto-sync Gist in background dopo 3 secondi di inattività
   if(typeof _gistSyncTimer!=='undefined') clearTimeout(_gistSyncTimer);
   _gistSyncTimer=setTimeout(function(){
-    var c=gistConf();
-    if(!c.id||!c.token) return;
-    var payload={}; payload[c.file]={"content":JSON.stringify(raccogliDatiExport(),null,2)};
-    var xhr=new XMLHttpRequest();
-    xhr.open('PATCH','https://api.github.com/gists/'+c.id);
-    xhr.setRequestHeader('Authorization','token '+c.token);
-    xhr.setRequestHeader('Accept','application/vnd.github.v3+json');
-    xhr.setRequestHeader('Content-Type','application/json');
-    xhr.onload=function(){
-      if(xhr.status===200){
-        var ind=document.getElementById('save-indicator');
-        if(ind){ ind.textContent='✓ Salvato e sincronizzato'; ind.classList.add('show'); setTimeout(function(){ind.classList.remove('show');},2000); }
-      }
-    };
-    xhr.send(JSON.stringify({"files":payload}));
-  },3000); // aspetta 3 secondi di inattività prima di sincronizzare
+    _inviaGist(function(ok,err){
+      if(ok) _mostraStatoSync(true,'✓ Salvato e sincronizzato');
+      else _mostraStatoSync(false,'⚠ Gist non sincronizzato — '+err);
+    });
+  },3000);
 }
 var _gistSyncTimer;
 function _migraVecchieGiacenze(d){
@@ -2038,6 +2106,18 @@ function _applicaDati(d){
   if(d.anagrafica) anagrafica=d.anagrafica;
   if(d.scontriniGruppi) scontriniGruppi=d.scontriniGruppi;
   aggiornaAliasAnno();
+}
+// Da chiamare DOPO che dati e ricette personalizzate sono stati caricati
+function _dopoCaricamento(){
+  _stabilizzaIdSerie();
+  _fotografaRicetteVia();
+}
+// Le serie contrassegni vecchie senza uuid usano come id la posizione "carico_serie".
+// Fissiamo quell'id come uuid: identico a oggi, ma non cambia più se si elimina un carico.
+function _stabilizzaIdSerie(){
+  (contrassegniCarichi||[]).forEach(function(c,ci){
+    (c.serie||[]).forEach(function(s,si){ if(!s.uuid) s.uuid=ci+'_'+si; });
+  });
 }
 
 function carica(){
@@ -2138,7 +2218,7 @@ function esportaExcel(){
   lotti.forEach(function(l){
     l.prodotti.forEach(function(p){
       var lt=p.qt*p.fmt;
-      var c=calcRicetta(p.nome,lt)||{};
+      var c=ingrProdottoVia(l,p)||{};
       var s=p.serieId?infoSerie(p.serieId):null;
       var serieNome=s?(s.tipo+'·'+s.nome):'';
       var segsStr=(p.segmenti&&p.segmenti.length>0)?p.segmenti.map(function(sg){return sg.da+'-'+sg.a;}).join(' + '):(p.conDa&&p.conA?p.conDa+'-'+p.conA:'');
@@ -2226,6 +2306,7 @@ function leggiImport(e){
       var d=JSON.parse(ev.target.result);
       if(confirm('Importare i dati? I dati attuali verranno sostituiti.')){
         _applicaDati(d);
+        _dopoCaricamento();
         salva(); renderAll();
       }
     }catch(err){alert('Il file selezionato non è valido o è corrotto.');}
@@ -2265,29 +2346,34 @@ function renderGiacenze(){
   renderMetrics();
 }
 
+// Ingredienti di UN prodotto di una VIA. Usa la ricetta "fotografata" al salvataggio
+// della VIA (p.ric) — così modificare una ricetta non cambia le VIA passate —
+// e l'eventuale ricetta personalizzata della VIA (alc/cre totali della riga).
+// Non modifica i dati della VIA.
+function ingrProdottoVia(l,p){
+  var lt=p.qt*p.fmt;
+  var r=p.ric||tutteRicette()[p.nome];
+  var ov=null;
+  if(p.alc_idr_ov!=null&&p.cre_idr_ov!=null) ov={alc_idr:p.alc_idr_ov,cre_idr:p.cre_idr_ov};
+  else if(l&&l.ricettaOverride&&l.ricettaOverride[p.nome]) ov=l.ricettaOverride[p.nome]; // formato vecchio
+  return calcRicettaDa(r,lt,ov);
+}
+// Copia della ricetta attuale da salvare dentro la VIA
+function copiaRicetta(nome){
+  var r=tutteRicette()[nome];
+  return r?JSON.parse(JSON.stringify(r)):null;
+}
+// Le VIA registrate prima di questa versione ricevono la ricetta attuale:
+// da qui in poi modificare una ricetta non altera più i consumi già registrati.
+function _fotografaRicetteVia(){
+  (lotti||[]).forEach(function(l){
+    (l.prodotti||[]).forEach(function(p){ if(!p.ric){ var c=copiaRicetta(p.nome); if(c) p.ric=c; } });
+  });
+}
 function calcolaLottoIngr(l){
   var alc_idr=0,alc_ani=0,aro_idr=0,aro_ani=0,cre_idr=0,cre_ani=0;
   l.prodotti.forEach(function(p){
-    var lt=p.qt*p.fmt;
-    var c;
-    // Usa override se presente nel prodotto salvato
-    var has_ov=(p.alc_idr_ov!=null&&p.cre_idr_ov!=null);
-    if(!has_ov&&l.ricettaOverride&&l.ricettaOverride[p.nome]){
-      var ov=l.ricettaOverride[p.nome];
-      p.alc_idr_ov=ov.alc_idr;
-      p.cre_idr_ov=ov.cre_idr;
-      has_ov=true;
-    }
-    if(has_ov){
-      var all=tutteRicette(); var r=all[p.nome]||{};
-      var a_ani=p.alc_idr_ov*0.9775;
-      var cr_ani=p.cre_idr_ov*0.17;
-      var ar_idr=0,ar_ani=0;
-      (r.aro||[]).forEach(function(a){ar_idr+=a.idr*lt;ar_ani+=a.idr*lt*a.ac;});
-      c={alc_idr:p.alc_idr_ov,alc_ani:a_ani,aro_idr:ar_idr,aro_ani:ar_ani,cre_idr:p.cre_idr_ov,cre_ani:cr_ani};
-    } else {
-      c=calcRicetta(p.nome,lt);
-    }
+    var c=ingrProdottoVia(l,p);
     if(c){alc_idr+=c.alc_idr;alc_ani+=c.alc_ani;aro_idr+=c.aro_idr;aro_ani+=c.aro_ani;cre_idr+=c.cre_idr;cre_ani+=c.cre_ani;}
   });
   return{alc_idr:alc_idr,alc_ani:alc_ani,aro_idr:aro_idr,aro_ani:aro_ani,cre_idr:cre_idr,cre_ani:cre_ani,
@@ -2348,15 +2434,15 @@ function renderLotti(){
       var sm=serieMap[sk];
       var s=infoSerie(sm.serieId);
       // Calcola range effettivo per questa serie in questo lotto
-      var daE=null,aE=null;
+      var trE=[];
       l.prodotti.forEach(function(p){
-        if(p.serieId===sm.serieId&&p.conDa!=null&&p.conA!=null){
-          daE=daE===null?p.conDa:Math.min(daE,p.conDa);
-          aE=aE===null?p.conA:Math.max(aE,p.conA);
-        }
+        if(p.serieId!==sm.serieId) return;
+        var sgE=p.segmenti&&p.segmenti.length?p.segmenti:(p.conDa!=null&&p.conA!=null?[{da:p.conDa,a:p.conA}]:[]);
+        sgE.forEach(function(sg){trE.push(sg);});
       });
-      var range=(daE!==null&&aE!==null)?(' Da '+daE+' A '+aE):'';
-      return s?(s.tipo+'·'+s.nome+range+' (×'+sm.qt+')'):(( FMT_L[sm.fi]||'?')+' ×'+sm.qt);
+      trE.sort(function(a,b){return a.da-b.da;});
+      var range=trE.length?(' '+trE.map(function(sg){return 'Da '+sg.da+' A '+sg.a;}).join(', ')):'';
+      return s?(escHtml(s.tipo+'·'+s.nome)+range+' (×'+sm.qt+')'):(( FMT_L[sm.fi]||'?')+' ×'+sm.qt);
     }).join(' | ');
 
     html+='<div class="card"><div class="card-header">'+
@@ -2385,21 +2471,8 @@ function renderLotti(){
     l.prodotti.forEach(function(p){
       if(fLotto && !(p.lottoP||'').toLowerCase().includes(fLotto)) return;
       var lt=p.qt*p.fmt;
-      var c;
-      var has_ov3=(p.alc_idr_ov!=null&&p.cre_idr_ov!=null);
-      if(!has_ov3&&l.ricettaOverride&&l.ricettaOverride[p.nome]){
-        p.alc_idr_ov=l.ricettaOverride[p.nome].alc_idr;
-        p.cre_idr_ov=l.ricettaOverride[p.nome].cre_idr;
-        has_ov3=true;
-      }
-      if(has_ov3){
-        var all3=tutteRicette();var r3=all3[p.nome]||{};
-        var ar3=0;(r3.aro||[]).forEach(function(a){ar3+=a.idr*lt*a.ac;});
-        c={alc_idr:p.alc_idr_ov,alc_ani:p.alc_idr_ov*0.9775,aro_idr:(r3.alc||0)*lt,aro_ani:ar3,cre_idr:p.cre_idr_ov,cre_ani:p.cre_idr_ov*0.17};
-      } else {
-        c=calcRicetta(p.nome,lt);
-      }
-      if(c)html+='<tr><td>'+dn(p.nome)+'</td><td style="font-family:\'Courier New\',Courier,monospace;font-size:11px;color:var(--purple)">'+(p.lottoP||'—')+'</td><td class="qty-num">'+p.fmt+'L</td><td class="qty-num">'+p.qt+'</td><td class="qty-num">'+lt.toFixed(2)+'</td>'+
+      var c=ingrProdottoVia(l,p);
+      if(c)html+='<tr><td>'+dn(p.nome)+'</td><td style="font-family:\'Courier New\',Courier,monospace;font-size:11px;color:var(--purple)">'+escHtml(p.lottoP||'—')+'</td><td class="qty-num">'+p.fmt+'L</td><td class="qty-num">'+p.qt+'</td><td class="qty-num">'+lt.toFixed(2)+'</td>'+
         '<td class="alc-t qty-num">'+c.alc_idr.toFixed(3)+'</td><td class="alc-t qty-num">'+c.alc_ani.toFixed(3)+'</td>'+
         '<td class="aro-t qty-num">'+c.aro_idr.toFixed(3)+'</td><td class="aro-t qty-num">'+c.aro_ani.toFixed(3)+'</td>'+
         '<td class="cre-t qty-num">'+c.cre_idr.toFixed(3)+'</td><td class="cre-t qty-num">'+c.cre_ani.toFixed(3)+'</td>'+
@@ -2415,7 +2488,7 @@ function renderLotti(){
         })()+'</td></tr>';
     });
     html+='</tbody></table></div>';
-    if(l.note)html+='<div style="margin-top:8px;font-size:12px;color:#6b6057;font-family:\'Courier New\',Courier,monospace">📝 '+l.note+'</div>';
+    if(l.note)html+='<div style="margin-top:8px;font-size:12px;color:#6b6057;font-family:\'Courier New\',Courier,monospace">📝 '+escHtml(l.note)+'</div>';
     html+='</div>';
   });
   el.innerHTML=html;
@@ -2442,22 +2515,7 @@ function stampaVia(i){
   var totBot=0, totLt=0, totAlcI=0, totAlcA=0, totAroI=0, totAroA=0, totCreI=0, totCreA=0;
   l.prodotti.forEach(function(p){
     var lt=p.qt*p.fmt;
-    // Usa override se presente nel prodotto salvato
-    var c;
-    var has_ov=(p.alc_idr_ov!=null&&p.cre_idr_ov!=null);
-    if(!has_ov&&l.ricettaOverride&&l.ricettaOverride[p.nome]){
-      p.alc_idr_ov=l.ricettaOverride[p.nome].alc_idr;
-      p.cre_idr_ov=l.ricettaOverride[p.nome].cre_idr;
-      has_ov=true;
-    }
-    if(has_ov){
-      var all2=tutteRicette();var r2=all2[p.nome]||{};
-      var ar_idr2=0,ar_ani2=0;
-      (r2.aro||[]).forEach(function(a){ar_idr2+=a.idr*lt;ar_ani2+=a.idr*lt*a.ac;});
-      c={alc_idr:p.alc_idr_ov,alc_ani:p.alc_idr_ov*0.9775,aro_idr:ar_idr2,aro_ani:ar_ani2,cre_idr:p.cre_idr_ov,cre_ani:p.cre_idr_ov*0.17};
-    } else {
-      c=calcRicetta(p.nome,lt);
-    }
+    var c=ingrProdottoVia(l,p);
     if(c){
       totBot+=p.qt; totLt+=lt;
       totAlcI+=c.alc_idr; totAlcA+=c.alc_ani;
@@ -2515,14 +2573,18 @@ function stampaVia(i){
     '<table><thead><tr><th>Prodotto</th><th>Formato</th><th>Serie</th><th>Da</th><th>A</th><th>Qt</th></tr></thead><tbody>'+
     l.prodotti.filter(function(p){ return p.conDa&&p.conA; }).map(function(p){
       var s3=infoSerie(p.serieId);
-      return '<tr>'+
-        '<td>'+dn(p.nome)+'</td>'+
-        '<td>'+p.fmt+'L</td>'+
-        '<td style="color:#4a2d6b;font-weight:500">'+(s3?(s3.tipo+' · '+s3.nome):'—')+'</td>'+
-        '<td style="font-family:monospace">'+p.conDa+'</td>'+
-        '<td style="font-family:monospace">'+p.conA+'</td>'+
-        '<td style="font-family:monospace">'+p.qt+'</td>'+
-      '</tr>';
+      // Una riga per ogni tratto effettivamente usato (non dal primo all'ultimo numero)
+      var sg3=p.segmenti&&p.segmenti.length?p.segmenti:[{da:p.conDa,a:p.conA}];
+      return sg3.map(function(sg){
+        return '<tr>'+
+          '<td>'+dn(p.nome)+'</td>'+
+          '<td>'+p.fmt+'L</td>'+
+          '<td style="color:#4a2d6b;font-weight:500">'+(s3?(s3.tipo+' · '+s3.nome):'—')+'</td>'+
+          '<td style="font-family:monospace">'+sg.da+'</td>'+
+          '<td style="font-family:monospace">'+sg.a+'</td>'+
+          '<td style="font-family:monospace">'+(sg.a-sg.da+1)+'</td>'+
+        '</tr>';
+      }).join('');
     }).join('')+
     '</tbody></table></div>':'';
   var creRiga=ing.cre_idr>0?
@@ -2566,7 +2628,7 @@ function stampaVia(i){
       lpsStr+
       '<strong>Data:</strong> '+(l.data||'—')+' &nbsp;'+
       '<strong>Stampato il:</strong> '+new Date().toLocaleDateString('it')+' '+new Date().toLocaleTimeString('it')+
-      (l.note?'<br><strong>Note:</strong> '+l.note:'')+
+      (l.note?'<br><strong>Note:</strong> '+escHtml(l.note):'')+
     '</div>'+
   '</div>'+
   '<div class="block">'+
@@ -2639,8 +2701,8 @@ function renderVendite(){
     html+='<div class="card">';
     html+='<div class="card-header">';
     html+='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
-    html+='<span style="font-weight:500">'+v.cliente+'</span>';
-    html+='<span class="tag">'+v.tipo+(v.numFattura?' n.'+v.numFattura:'')+'</span>';
+    html+='<span style="font-weight:500">'+escHtml(v.cliente)+'</span>';
+    html+='<span class="tag">'+v.tipo+(v.numFattura?' n.'+escHtml(v.numFattura):'')+'</span>';
     html+='<span class="tag">'+(v.data||'—')+'</span>';
     html+='</div>';
     html+='<div style="display:flex;gap:6px">';
@@ -2929,7 +2991,7 @@ function anteprima(){
   var aromi=raccogliEditorAromi();
   var tot_aro=aromi.reduce(function(s,a){ return s+a.idr; },0);
   var altro=Math.max(0,1-alc-tot_aro-cre);
-  var alc_ani=alc*0.965;
+  var alc_ani=alc*0.9775; // stesso coefficiente usato nei calcoli delle VIA
   var aro_ani=aromi.reduce(function(s,a){ return s+a.idr*a.ac; },0);
   var cre_ani=cre*0.17;
   var tot_ani=alc_ani+aro_ani+cre_ani;
@@ -2952,11 +3014,28 @@ function salvaRicettaEditor(){
   if(!nome){alert('Inserisci il nome del prodotto');return;}
   if(!g){alert('Inserisci il grado alcolico');return;}
   var chiave=editorNomeOriginale||nome;
+  if(editorNomeOriginale&&nome!==editorNomeOriginale&&nome!==dn(editorNomeOriginale)){
+    alert('Il nome di un prodotto esistente non si può cambiare (giacenze e VIA sono collegate al nome).\nRipristina il nome "'+dn(editorNomeOriginale)+'" per salvare le modifiche.');
+    return;
+  }
+  // Nuova ricetta con un nome già esistente: sovrascriverebbe la ricetta e azzererebbe la giacenza
+  if(!editorNomeOriginale&&(tutteRicette()[nome]||giacenze[nome]||Object.keys(tutteRicette()).some(function(k){return dn(k).toLowerCase()===nome.toLowerCase();}))){
+    alert('Esiste già un prodotto chiamato "'+nome+'".\nPer cambiarne la ricetta aprilo con ✏️ dall\'elenco.');
+    return;
+  }
   ricetteCustom[chiave]={g:g,alc:alc,aro:aromi,cre:cre};
   if(!editorNomeOriginale&&!RICETTE[chiave]){
     giacenze[chiave]={grado:g,qt:[0,0,0,0,0,0,0]};
-    salva();
   }
+  // Il grado della giacenza segue quello della ricetta (serve alla Richiesta Contrassegni)
+  if(giacenze[chiave]) giacenze[chiave].grado=g;
+  // Le VIA già registrate conservano la ricetta con cui sono state fatte, salvo scelta esplicita
+  var viaConProdotto=lotti.filter(function(l){ return l.prodotti.some(function(p){ return p.nome===chiave; }); });
+  if(editorNomeOriginale&&viaConProdotto.length&&
+     confirm('Ricetta salvata per le prossime VIA.\n\nVuoi applicarla anche alle '+viaConProdotto.length+' VIA già registrate con '+dn(chiave)+'?\n(Cambierebbero i consumi di alcol già registrati.)\n\nOK = sì, applica anche al passato\nAnnulla = no, solo da ora in poi')){
+    viaConProdotto.forEach(function(l){ l.prodotti.forEach(function(p){ if(p.nome===chiave) p.ric=copiaRicetta(chiave); }); });
+  }
+  salva();
   salvaRicetteCustom();
   closeEditorRicetta();
   renderRicette();
@@ -2965,6 +3044,15 @@ function salvaRicettaEditor(){
 
 function eliminaRicettaEditor(){
   if(!editorNomeOriginale) return;
+  var nomeR=editorNomeOriginale;
+  // Prodotto solo personalizzato (non di base) con giacenza o movimenti: non si elimina
+  if(!RICETTE[nomeR]){
+    var inUso=lotti.some(function(l){return l.prodotti.some(function(p){return p.nome===nomeR;});})||
+      vendite.some(function(v){return v.prodotti.some(function(p){return p.nome===nomeR;});})||
+      scontriniGruppi.some(function(s){return (s.prodotti||[]).some(function(p){return p.nome===nomeR;});})||
+      Object.keys(giacenzePerAnno).some(function(a){var g=giacenzePerAnno[a][nomeR];return g&&g.qt.some(function(q){return q!==0;});});
+    if(inUso){ alert('"'+dn(nomeR)+'" ha giacenza o movimenti registrati (VIA, vendite o scontrini): non può essere eliminato.'); return; }
+  }
   if(!confirm("Eliminare la ricetta custom "+editorNomeOriginale+"?")) return;
   delete ricetteCustom[editorNomeOriginale];
   salvaRicetteCustom();
@@ -3005,8 +3093,9 @@ function serieDisponibiliPerFmt(fmtIdx){
       }
     });
   });
-  // Sottrai utilizzi dai lotti
+  // Sottrai utilizzi dai lotti (esclusa la VIA in modifica)
   lotti.forEach(function(l){
+    if(_editingViaRef&&l===_editingViaRef) return;
     l.prodotti.forEach(function(p){
       if(Math.abs(p.fmt-FMT[fmtIdx])<0.001&&p.serieId){
         if(serieMap[p.serieId]) serieMap[p.serieId].usati+=p.qt;
@@ -3128,7 +3217,7 @@ function aggiornaSerieRow(fmtSel){
   } else {
     var opts='';
     serie.forEach(function(s){
-      opts+='<option value="'+s.id+'">'+s.tipo+' · '+s.nome+' (Disp: '+s.disponibili+')</option>';
+      opts+='<option value="'+s.id+'">'+escHtml(s.tipo+' · '+s.nome)+' (Disp: '+s.disponibili+')</option>';
     });
     selSerie.innerHTML=opts;
     selSerie.style.borderColor='var(--purple)';
@@ -3352,14 +3441,9 @@ function raccogliProdotti(cid){
     var creOvEl=r.querySelector('.pr-cre-ov');
     var alc_idr_ov=null;
     var cre_idr_ov=null;
-    // Leggi prima dal dataset della riga (scritto da scriviOverrideNelForm)
-    if(r.dataset&&r.dataset.alcOv&&r.dataset.alcOv!==''){
-      alc_idr_ov=parseFloat(r.dataset.alcOv);
-      cre_idr_ov=parseFloat(r.dataset.creOv);
-    } else if(alcOvEl&&alcOvEl.value!==''){
-      alc_idr_ov=parseFloat(alcOvEl.value);
-      cre_idr_ov=creOvEl&&creOvEl.value!==''?parseFloat(creOvEl.value):null;
-    }
+    // Ricetta personalizzata della riga: valida solo se la riga non è cambiata
+    var ovR=_overrideRiga(r);
+    if(ovR){ alc_idr_ov=ovR.alc_idr; cre_idr_ov=ovR.cre_idr; }
     res.push({nome:nomeSel.value,fmt:parseFloat(fmtSel.value),qt:qt,lottoP:lottoP,serieId:serieId,conDa:conDa,conA:conA,segmenti:segmenti,alc_idr_ov:alc_idr_ov,cre_idr_ov:cre_idr_ov});
   });
   return res;
@@ -3386,42 +3470,82 @@ var ALC_COEFF = 0.9775; // grado alcol (97.75%)
 var CRE_COEFF = 0.17;   // grado crema neutra (17%)
 
 // Calcola l'alcol necessario dato il totale anidri target e la crema già fissata
-function scriviTuttiOverride(){
-  var tbl=document.getElementById('override-tbl');
-  if(!tbl) return;
-  var rows=tbl.querySelectorAll('.override-row');
-  for(var ri=0;ri<rows.length;ri++){
-    var row=rows[ri];
-    var nome=row.dataset.nome;
-    var alcEl=row.querySelector('.ov-alc');
-    var creEl=row.querySelector('.ov-cre');
-    if(!alcEl||!creEl) continue;
-    var alc=parseFloat(alcEl.value)||0;
-    var cre=parseFloat(creEl.value)||0;
-    scriviOverrideNelForm(nome,alc,cre);
-  }
+// ── Ricetta personalizzata per riga ──
+// Ogni riga prodotto del form VIA ha un id (rid). La ricetta personalizzata è
+// salvata SULLA RIGA insieme a una "firma" prodotto|formato|quantità: se poi la
+// riga cambia, i valori non valgono più (sono totali calcolati per quella riga).
+var _ridSeq=0;
+function _ridRiga(row){ if(!row.dataset.rid) row.dataset.rid='r'+(++_ridSeq); return row.dataset.rid; }
+function _firmaRiga(row){
+  var n=row.querySelector('.pr-nome'), f=row.querySelector('.pr-fmt'), q=row.querySelector('.pr-qt');
+  return (n?n.value:'')+'|'+(f?parseFloat(f.value):'')+'|'+(q?(parseInt(q.value)||0):'');
 }
-
-function scriviOverrideNelForm(nome,alc_idr,cre_idr){
+function _rigaDaRid(rid){
   var rows=document.getElementById('lotto-prodotti').querySelectorAll('.lotto-row');
-  for(var i=0;i<rows.length;i++){
-    var row=rows[i];
-    var nomeSel=row.querySelector('.pr-nome');
-    if(nomeSel&&nomeSel.value===nome){
-      // Scrivi sia sui campi nascosti che sul dataset della riga
-      row.dataset.alcOv=String(alc_idr);
-      row.dataset.creOv=String(cre_idr);
-      var alcEl=row.querySelector('.pr-alc-ov');
-      var creEl=row.querySelector('.pr-cre-ov');
-      if(alcEl) alcEl.value=String(alc_idr);
-      if(creEl) creEl.value=String(cre_idr);
+  for(var i=0;i<rows.length;i++) if(rows[i].dataset.rid===rid) return rows[i];
+  return null;
+}
+function _scriviOverrideRiga(row,alc_idr,cre_idr){
+  row.dataset.alcOv=String(alc_idr);
+  row.dataset.creOv=String(cre_idr);
+  row.dataset.ovFirma=_firmaRiga(row);
+  var alcEl=row.querySelector('.pr-alc-ov'), creEl=row.querySelector('.pr-cre-ov');
+  if(alcEl) alcEl.value=String(alc_idr);
+  if(creEl) creEl.value=String(cre_idr);
+}
+function _cancellaOverrideRiga(row){
+  delete row.dataset.alcOv; delete row.dataset.creOv; delete row.dataset.ovFirma;
+  var alcEl=row.querySelector('.pr-alc-ov'), creEl=row.querySelector('.pr-cre-ov');
+  if(alcEl) alcEl.value=''; if(creEl) creEl.value='';
+}
+function _cancellaTuttiOverride(){
+  document.getElementById('lotto-prodotti').querySelectorAll('.lotto-row').forEach(_cancellaOverrideRiga);
+}
+// Override valido della riga (null se assente o se la riga è cambiata)
+function _overrideRiga(row){
+  if(!row.dataset.alcOv||row.dataset.alcOv==='') return null;
+  if(row.dataset.ovFirma!==_firmaRiga(row)) return null;
+  return {alc_idr:parseFloat(row.dataset.alcOv),cre_idr:parseFloat(row.dataset.creOv)};
+}
+// Righe con ricetta personalizzata non più valida (prodotto/formato/qt cambiati)
+function _overrideScaduti(){
+  var out=[];
+  document.getElementById('lotto-prodotti').querySelectorAll('.lotto-row').forEach(function(row){
+    if(row.dataset.alcOv&&row.dataset.ovFirma!==_firmaRiga(row)){
+      var n=row.querySelector('.pr-nome'); out.push(n?dn(n.value):'?');
     }
+  });
+  return out;
+}
+// Righe del form con qt>0 (per il pannello ricetta)
+function _righeFormVia(){
+  var out=[];
+  document.getElementById('lotto-prodotti').querySelectorAll('.lotto-row').forEach(function(row){
+    var n=row.querySelector('.pr-nome'), f=row.querySelector('.pr-fmt'), q=row.querySelector('.pr-qt');
+    if(!n||!f||!q) return;
+    var qt=parseInt(q.value)||0; if(qt<=0) return;
+    out.push({row:row,nome:n.value,fmt:parseFloat(f.value),qt:qt});
+  });
+  return out;
+}
+function _aggiornaPulsanteOverride(){
+  var btnOv=document.getElementById('btn-override');
+  if(!btnOv) return;
+  var almenoUno=_righeFormVia().some(function(x){return !!_overrideRiga(x.row);});
+  if(almenoUno){
+    btnOv.textContent='✅ Ricetta modificata — clicca per riaprire';
+    btnOv.style.background='#e8f8e8';btnOv.style.borderColor='var(--green)';btnOv.style.color='var(--green)';
+  } else {
+    btnOv.textContent='⚗️ Modifica ricetta per questo VIA';
+    btnOv.style.background='';btnOv.style.borderColor='';btnOv.style.color='';
   }
 }
 
 
-function ricalcolaAlcol(){
+function ricalcolaAlcol(ev){
   var rows=document.getElementById('override-tbl').querySelectorAll('.override-row');
+  // Ricalcola solo la riga modificata (le altre righe restano come sono)
+  if(ev&&ev.target&&ev.target.closest){ var trM=ev.target.closest('.override-row'); if(trM) rows=[trM]; }
   for(var ri=0;ri<rows.length;ri++){
     var row=rows[ri];
     var g=parseFloat(row.dataset.g)||0;
@@ -3433,14 +3557,12 @@ function ricalcolaAlcol(){
     var cre_idr=parseFloat(creInp.value)||0;
     var cre_ani=cre_idr*0.17;
     var tot_ani_target=lt*g/100;
-    var all=tutteRicette(); var r=all[nome]||{};
+    var r=_ricettaPerForm(nome)||{};
     var aro_ani=0;
     (r.aro||[]).forEach(function(a){aro_ani+=a.idr*lt*a.ac;});
     var alc_ani=tot_ani_target-cre_ani-aro_ani;
     var alc_idr=alc_ani>0?alc_ani/0.9775:0;
     alcInp.value=alc_idr.toFixed(3);
-    // Scrivi nei campi nascosti della riga prodotto VIA
-    scriviOverrideNelForm(nome,alc_idr,cre_idr);
     var gradoEl=row.querySelector('.ov-grado');
     var totEl=row.querySelector('.ov-tot-ani');
     var grado=lt>0?((alc_ani+cre_ani+aro_ani)/lt*100):0;
@@ -3449,8 +3571,10 @@ function ricalcolaAlcol(){
   }
 }
 
-function ricalcolaCrema(){
+function ricalcolaCrema(ev){
   var rows=document.getElementById('override-tbl').querySelectorAll('.override-row');
+  // Ricalcola solo la riga modificata (le altre righe restano come sono)
+  if(ev&&ev.target&&ev.target.closest){ var trM=ev.target.closest('.override-row'); if(trM) rows=[trM]; }
   for(var ri=0;ri<rows.length;ri++){
     var row=rows[ri];
     var g=parseFloat(row.dataset.g)||0;
@@ -3462,14 +3586,12 @@ function ricalcolaCrema(){
     var alc_idr=parseFloat(alcInp.value)||0;
     var alc_ani=alc_idr*0.9775;
     var tot_ani_target=lt*g/100;
-    var all=tutteRicette(); var r=all[nome]||{};
+    var r=_ricettaPerForm(nome)||{};
     var aro_ani=0;
     (r.aro||[]).forEach(function(a){aro_ani+=a.idr*lt*a.ac;});
     var cre_ani=tot_ani_target-alc_ani-aro_ani;
     var cre_idr=cre_ani>0?cre_ani/0.17:0;
     creInp.value=cre_idr.toFixed(3);
-    // Scrivi nei campi nascosti della riga prodotto VIA
-    scriviOverrideNelForm(nome,alc_idr,cre_idr);
     var gradoEl=row.querySelector('.ov-grado');
     var totEl=row.querySelector('.ov-tot-ani');
     var grado=lt>0?((alc_ani+cre_ani+aro_ani)/lt*100):0;
@@ -3486,16 +3608,19 @@ function confermaOverrideRicetta(){
   _confermataOverride={};
   for(var ri=0;ri<rows.length;ri++){
     var row=rows[ri];
-    var nome=row.dataset?row.dataset.nome:'';
+    var rid=row.dataset?row.dataset.rid:'';
     var alcEl=row.querySelector('.ov-alc');
     var creEl=row.querySelector('.ov-cre');
-    if(!nome||!alcEl||!creEl) continue;
+    var formRow=rid?_rigaDaRid(rid):null;
+    if(!formRow||!alcEl||!creEl) continue;
     var alc=parseFloat(alcEl.value);
     var cre=parseFloat(creEl.value);
     if(!isNaN(alc)&&!isNaN(cre)){
-      _confermataOverride[nome]={alc_idr:alc,cre_idr:cre};
-      // SCRIVI DIRETTAMENTE nei campi nascosti della riga prodotto
-      scriviOverrideNelForm(nome,alc,cre);
+      // Valori uguali alla ricetta standard: la riga resta "standard"
+      var rStd=_ricettaPerForm(row.dataset.nome)||{}; var ltR=parseFloat(row.dataset.lt)||0;
+      if(Math.abs(alc-(rStd.alc||0)*ltR)<0.005&&Math.abs(cre-(rStd.cre||0)*ltR)<0.005){ _cancellaOverrideRiga(formRow); continue; }
+      _confermataOverride[rid]={alc_idr:alc,cre_idr:cre};
+      _scriviOverrideRiga(formRow,alc,cre);
     }
   }
   if(Object.keys(_confermataOverride).length===0) _confermataOverride=null;
@@ -3521,14 +3646,31 @@ function confermaOverrideRicetta(){
 
 function annullaOverrideRicetta(){
   _confermataOverride=null;
+  // Le modifiche fatte nel pannello e non confermate vengono scartate.
+  // Se la VIA ha già una ricetta personalizzata confermata, si chiede se toglierla.
+  var conOverride=_righeFormVia().some(function(x){return !!_overrideRiga(x.row);});
+  if(conOverride&&confirm('Questa VIA ha una ricetta personalizzata.\n\nOK = torna alla ricetta standard\nAnnulla = mantieni la ricetta personalizzata')){
+    _cancellaTuttiOverride();
+  }
   var wrap=document.getElementById('override-wrap');
-  var btn=document.getElementById('btn-override');
   _overrideAttivo=false;
   if(wrap) wrap.style.display='none';
-  if(btn){
-    btn.textContent='⚗️ Modifica ricetta per questo VIA';
-    btn.style.background='';btn.style.borderColor='';btn.style.color='';
+  _aggiornaPulsanteOverride();
+  aggiornaFabbisognoSeAperto();
+}
+function aggiornaFabbisognoSeAperto(){
+  var el=document.getElementById('lotto-fabbisogno');
+  if(el&&el.style.display==='block'&&_righeFormVia().length) aggiornaFabbisogno();
+}
+// Ricetta da usare nel form VIA: in modifica, quella registrata nella VIA originale
+function _ricettaPerForm(nome){
+  if(_editingViaRef){
+    for(var i=0;i<_editingViaRef.prodotti.length;i++){
+      var op=_editingViaRef.prodotti[i];
+      if(op.nome===nome&&op.ric) return op.ric;
+    }
   }
+  return tutteRicette()[nome];
 }
 
 function toggleOverrideRicetta(){
@@ -3536,7 +3678,7 @@ function toggleOverrideRicetta(){
   var btn=document.getElementById('btn-override');
   if(!wrap) return;
   if(!_overrideAttivo){
-    var prodotti=raccogliProdotti('lotto-prodotti');
+    var prodotti=_righeFormVia();
     if(!prodotti.length){alert('Aggiungi prima i prodotti');return;}
     var all=tutteRicette();
     var tbody=document.getElementById('override-tbl').querySelector('tbody');
@@ -3544,13 +3686,15 @@ function toggleOverrideRicetta(){
     for(var pi=0;pi<prodotti.length;pi++){
       var p=prodotti[pi];
       var lt=p.qt*p.fmt;
-      var r=all[p.nome]||{};
+      var r=_ricettaPerForm(p.nome)||{};
       var g=r.g||0;
       var alc_std=(r.alc||0)*lt;
       var cre_std=(r.cre||0)*lt;
 
       var tr=document.createElement('tr');
       tr.className='override-row';
+      tr.dataset.rid=_ridRiga(p.row);
+      var ovEsistente=_overrideRiga(p.row);
       tr.dataset.nome=p.nome;
       tr.dataset.lt=String(lt);
       tr.dataset.g=String(g);
@@ -3571,7 +3715,7 @@ function toggleOverrideRicetta(){
       alcInp.type='number'; alcInp.className='ov-alc';
       alcInp.step='0.001'; alcInp.min='0';
       // Usa valore confermato se presente, altrimenti standard
-      var alc_val=(_confermataOverride&&_confermataOverride[p.nome])?_confermataOverride[p.nome].alc_idr:alc_std;
+      var alc_val=ovEsistente?ovEsistente.alc_idr:alc_std;
       alcInp.value=alc_val.toFixed(3);
       alcInp.style.width='90px';
       td1.appendChild(alcInp);
@@ -3582,7 +3726,7 @@ function toggleOverrideRicetta(){
       var creInp=document.createElement('input');
       creInp.type='number'; creInp.className='ov-cre';
       creInp.step='0.001'; creInp.min='0';
-      var cre_val=(_confermataOverride&&_confermataOverride[p.nome])?_confermataOverride[p.nome].cre_idr:cre_std;
+      var cre_val=ovEsistente?ovEsistente.cre_idr:cre_std;
       creInp.value=cre_val.toFixed(3);
       creInp.style.width='90px';
       td2.appendChild(creInp);
@@ -3621,7 +3765,6 @@ function toggleOverrideRicetta(){
     _overrideAttivo=true;
     wrap.style.display='block';
     if(btn) btn.textContent='✕ Annulla modifica ricetta';
-    scriviTuttiOverride();
     // Event delegation per i pulsanti Conferma/Annulla
     wrap.onclick=function(e){
       var btn2=e.target.closest('[data-action]');
@@ -3630,10 +3773,8 @@ function toggleOverrideRicetta(){
       else if(btn2.dataset.action==='annulla-override') annullaOverrideRicetta();
     };
   } else {
-    _overrideAttivo=false;
+    annullaOverrideRicetta();
     _pendingOverride=null;
-    wrap.style.display='none';
-    if(btn) btn.textContent='⚗️ Modifica ricetta per questo VIA';
   }
 }
 
@@ -3675,7 +3816,7 @@ function aggiornaFabbisogno(){
   if(!prodotti.length){alert('Aggiungi prima i prodotti');return;}
   var tAI=0,tAA=0,tRoI=0,tRoA=0,tCI=0,tCA=0;var righe='';
   prodotti.forEach(function(p){
-    var lt=p.qt*p.fmt;var ovr=_confermataOverride||getOverrideRicetta(); var ovp=ovr?ovr[p.nome]:null; var c=calcRicetta(p.nome,lt,ovp?{alc_idr:ovp.alc_idr,cre_idr:ovp.cre_idr}:null);
+    var lt=p.qt*p.fmt; var c=calcRicettaDa(_ricettaPerForm(p.nome),lt,(p.alc_idr_ov!=null&&p.cre_idr_ov!=null)?{alc_idr:p.alc_idr_ov,cre_idr:p.cre_idr_ov}:null);
     if(c){tAI+=c.alc_idr;tAA+=c.alc_ani;tRoI+=c.aro_idr;tRoA+=c.aro_ani;tCI+=c.cre_idr;tCA+=c.cre_ani;
       righe+='<tr><td>'+dn(p.nome)+'</td><td>'+lt.toFixed(2)+'</td>'+
         '<td class="alc-t qty-num">'+c.alc_idr.toFixed(3)+'</td><td class="alc-t qty-num">'+c.alc_ani.toFixed(3)+'</td>'+
@@ -3698,11 +3839,12 @@ function aggiornaFabbisogno(){
 
 function openLotto(){
   _editingViaIdx=null;
+  _editingViaRef=null;
   document.getElementById('editing-banner').style.display='none';
   document.getElementById('lotto-via').value=prossimVia();
   document.getElementById('lotto-via').readOnly=false;
   document.getElementById('via-hint').textContent=lotti.length?'Ultimo registrato: VIA '+(prossimVia()-1):' ';
-  document.getElementById('lotto-data').value=new Date().toISOString().slice(0,10);
+  document.getElementById('lotto-data').value=oggiISO();
   document.getElementById('lotto-note').value='';
   document.getElementById('lotto-prodotti').innerHTML='';
   document.getElementById('lotto-fabbisogno').style.display='none';
@@ -3725,6 +3867,8 @@ function editVia(i){
   var l=lotti[i];
   if(!l) return;
   _editingViaIdx=i;
+  _editingViaRef=l;
+  resetOverride();
   // Mostra banner modifica
   var banner=document.getElementById('editing-banner');
   banner.style.display='flex';
@@ -3757,6 +3901,13 @@ function editVia(i){
       qtInp.value=p.qt;
       // Imposta lotto prodotto
       if(lottoInp) lottoInp.value=p.lottoP||'';
+      // Ripristina la ricetta personalizzata salvata per questa riga
+      var ovSalv=null;
+      if(p.alc_idr_ov!=null&&p.cre_idr_ov!=null) ovSalv={alc_idr:p.alc_idr_ov,cre_idr:p.cre_idr_ov};
+      else if(l.ricettaOverride&&l.ricettaOverride[p.nome]) ovSalv=l.ricettaOverride[p.nome];
+      _ridRiga(row);
+      if(ovSalv) _scriviOverrideRiga(row,ovSalv.alc_idr,ovSalv.cre_idr);
+      _aggiornaPulsanteOverride();
       // Aggiorna serie (aspetta un tick)
       aggiornaSerieRow(fmtSel);
       setTimeout(function(){
@@ -3782,29 +3933,14 @@ function editVia(i){
   var btnOv=document.getElementById('btn-override');
   if(wrapOv){wrapOv.style.display='none';}
   if(btnOv){btnOv.textContent='⚗️ Modifica ricetta per questo VIA';}
-  if(l.ricettaOverride){
-    toggleOverrideRicetta();
-    setTimeout(function(){
-      var rows=document.getElementById('override-tbl').querySelectorAll('.override-row');
-      rows.forEach(function(row){
-        var nome=row.dataset.nome;
-        var ov=l.ricettaOverride[nome];
-        if(ov){
-          var alcInp=row.querySelector('.ov-alc');
-          var creInp=row.querySelector('.ov-cre');
-          if(alcInp){alcInp.value=ov.alc_idr.toFixed(3);}
-          if(creInp){creInp.value=ov.cre_idr.toFixed(3);}
-        }
-      });
-      ricalcolaAlcol();
-    },100);
-  }
+  // La ricetta personalizzata viene ripristinata riga per riga (vedi sopra)
 }
 
 function closeLotto(){
   resetOverride();
   document.getElementById('lotto-form').style.display='none';
   _editingViaIdx=null;
+  _editingViaRef=null;
   document.getElementById('editing-banner').style.display='none';
   document.getElementById('lotto-via').readOnly=false;
   document.getElementById('btn-salva-via').textContent='Salva VIA';
@@ -3841,44 +3977,58 @@ function salvaLottoConOverride(ricettaOverride){
   var data=document.getElementById('lotto-data').value;
   var note=document.getElementById('lotto-note').value.trim();
   var isEdit=_editingViaIdx!==null;
-  var lottoOriginale=isEdit?lotti[_editingViaIdx]:null;
+  var lottoOriginale=isEdit?_editingViaRef:null;
+  var idxOriginale=isEdit?lotti.indexOf(lottoOriginale):-1;
+  if(isEdit&&idxOriginale<0){alert('La VIA in modifica non è più presente. Chiudi il modulo e riaprila.');return;}
 
   if(!via||isNaN(via)){alert('Indicare il numero VIA');return;}
   if(!isEdit&&lotti.find(function(l){ return l.via==via; })){
     alert('VIA '+via+' è già presente nel registro.');return;
   }
-  var prodotti=raccogliProdotti('lotto-prodotti');
-  // Inietta override confermato direttamente nei prodotti
-  if(_confermataOverride){
-    for(var pi0=0;pi0<prodotti.length;pi0++){
-      var pov=prodotti[pi0];
-      var ov0=_confermataOverride[pov.nome];
-      if(ov0){pov.alc_idr_ov=ov0.alc_idr;pov.cre_idr_ov=ov0.cre_idr;}
-    }
+  // Se il pannello ricetta è ancora aperto, i valori inseriti valgono come confermati
+  if(_overrideAttivo) confermaOverrideRicetta();
+  var scaduti=_overrideScaduti();
+  if(scaduti.length){
+    alert('⚠ Hai cambiato prodotto, formato o quantità dopo aver modificato la ricetta di: '+scaduti.join(', ')+'.\nRiapri "Modifica ricetta" e conferma i valori aggiornati (oppure annullala) prima di salvare.');
+    return;
   }
+  var prodotti=raccogliProdotti('lotto-prodotti');
   if(!prodotti.length){alert('Aggiungi almeno un prodotto con qt > 0');return;}
 
-  // Verifica conflitti INTRA-FORM
-  for(var i=0;i<prodotti.length;i++){
-    for(var j=i+1;j<prodotti.length;j++){
-      var pi=prodotti[i], pj=prodotti[j];
-      if(pi.serieId&&pj.serieId&&pi.serieId===pj.serieId&&pi.conDa&&pi.conA&&pj.conDa&&pj.conA){
-        if(!(pi.conA<pj.conDa||pi.conDa>pj.conA)){
-          var si2=infoSerie(pi.serieId);
-          var nome2=si2?(si2.tipo+'.'+si2.nome):pi.serieId;
-          alert('⛔ Conflitto contrassegni!\nSerie: '+nome2+' - '+dn(pi.nome)+': Da '+pi.conDa+' A '+pi.conA+' / '+dn(pj.nome)+': Da '+pj.conDa+' A '+pj.conA);
-          return;
-        }
+  // Verifica conflitti INTRA-FORM: confronta OGNI tratto Da/A con tutti gli altri
+  // della stessa serie, anche dentro la stessa riga
+  var tratti=[];
+  prodotti.forEach(function(p){
+    if(!p.serieId) return;
+    var sg0=p.segmenti&&p.segmenti.length?p.segmenti:(p.conDa&&p.conA?[{da:p.conDa,a:p.conA}]:[]);
+    sg0.forEach(function(sg){ tratti.push({serieId:p.serieId,nome:p.nome,da:sg.da,a:sg.a}); });
+  });
+  for(var i=0;i<tratti.length;i++){
+    var ti=tratti[i];
+    if(ti.da>ti.a){ alert('⛔ Range non valido per '+dn(ti.nome)+': Da '+ti.da+' è maggiore di A '+ti.a); return; }
+    for(var j=i+1;j<tratti.length;j++){
+      var tj=tratti[j];
+      if(ti.serieId===tj.serieId&&!(ti.a<tj.da||ti.da>tj.a)){
+        var si2=infoSerie(ti.serieId);
+        var nome2=si2?(si2.tipo+'.'+si2.nome):ti.serieId;
+        alert('⛔ Conflitto contrassegni!\nSerie: '+nome2+' - '+dn(ti.nome)+': Da '+ti.da+' A '+ti.a+' / '+dn(tj.nome)+': Da '+tj.da+' A '+tj.a);
+        return;
       }
     }
   }
+  // Ricetta usata: in modifica si conserva quella già registrata per lo stesso prodotto
+  prodotti.forEach(function(p){
+    var prec=null;
+    if(lottoOriginale) lottoOriginale.prodotti.forEach(function(op){ if(!prec&&op.nome===p.nome&&op.ric) prec=op.ric; });
+    p.ric=prec?JSON.parse(JSON.stringify(prec)):copiaRicetta(p.nome);
+  });
 
   // In modalità modifica: storna temporaneamente il lotto originale
   if(isEdit){
     lottoOriginale.prodotti.forEach(function(p){
       if(giacenze[p.nome]){var fi=FMT.indexOf(p.fmt);if(fi>=0)giacenze[p.nome].qt[fi]-=p.qt;}
     });
-    lotti.splice(_editingViaIdx,1);
+    lotti.splice(idxOriginale,1);
   }
   // Verifica contrassegno obbligatorio, range e conflitti
   var erroreValidazione=null;
@@ -3911,7 +4061,7 @@ function salvaLottoConOverride(ricettaOverride){
 
   if(erroreValidazione){
     if(isEdit){
-      lotti.splice(_editingViaIdx,0,lottoOriginale);
+      lotti.splice(idxOriginale,0,lottoOriginale);
       lottoOriginale.prodotti.forEach(function(p){
         if(giacenze[p.nome]){var fi=FMT.indexOf(p.fmt);if(fi>=0)giacenze[p.nome].qt[fi]+=p.qt;}
       });
@@ -3937,6 +4087,8 @@ function salvaLottoConOverride(ricettaOverride){
 
 function eliminaLotto(i){
   var l=lotti[i];
+  if(!l) return;
+  if(_editingViaRef){alert('Chiudi prima il modulo VIA aperto, poi elimina.');return;}
   if(!confirm('Eliminare VIA '+l.via+'? La giacenza e i contrassegni verranno stornati.'))return;
   l.prodotti.forEach(function(p){if(giacenze[p.nome]){var idx=FMT.indexOf(p.fmt);if(idx>=0)giacenze[p.nome].qt[idx]-=p.qt;}});
   lotti.splice(i,1);salva();renderLotti();renderGiacenze();renderContrassegni();
@@ -3946,18 +4098,20 @@ function modificaVendita(i){
   var v=vendite[i];
   if(!v) return;
   _editingVenditaIdx=i;
-  // Storna le giacenze della vendita originale
-  v.prodotti.forEach(function(p){
-    if(giacenze[p.nome]){var fi=FMT.indexOf(p.fmt);if(fi>=0)giacenze[p.nome].qt[fi]+=p.qt;}
-  });
-  // Precompila il form
+  // Le giacenze NON vengono stornate qui: lo storno avviene in salvaVendita,
+  // così "Annulla" o un errore di validazione non alterano il magazzino.
+  // Precompila il form (cliente compreso)
+  resetAnagVendita();
+  var cid=v.clienteId;
+  if(!cid){var trov=anagrafica.filter(function(a){return a.ragione===v.cliente;});if(trov.length===1)cid=trov[0].id;}
+  if(cid) selezionaAnagVendita(cid,v.cliente||'');
   document.getElementById('v-cliente').value=v.cliente||'';
   document.getElementById('v-data').value=v.data||'';
   document.getElementById('v-tipo').value=v.tipo||'Fattura';
   var nfEl=document.getElementById('v-numfattura');
   if(nfEl) nfEl.value=v.numFattura||'';
   var wrap=document.getElementById('v-numfattura-wrap');
-  if(wrap) wrap.style.display=(v.tipo==='Fattura'?'block':'none');
+  if(wrap) wrap.style.display=(v.tipo==='Fattura'||v.tipo==='DDT'?'block':'none');
   // Precompila prodotti
   document.getElementById('vendita-prodotti').innerHTML='';
   v.prodotti.forEach(function(p){
@@ -3995,7 +4149,7 @@ function openVendita(){
   var cp=document.getElementById('v-cliente-pill');if(cp)cp.innerHTML='';
   var ci=document.getElementById('v-cliente-id');if(ci)ci.value='';
   document.getElementById('v-cliente').value='';
-  document.getElementById('v-data').value=new Date().toISOString().slice(0,10);
+  document.getElementById('v-data').value=oggiISO();
   document.getElementById('v-tipo').value='Fattura';
   var nf=document.getElementById('v-numfattura');if(nf)nf.value='';
   var wrap=document.getElementById('v-numfattura-wrap');if(wrap)wrap.style.display='block';
@@ -4023,16 +4177,20 @@ function salvaVendita(){
   if(tipo==='Fattura'&&!numFattura){alert('Indicare il numero documento');return;}
   var prodotti=raccogliProdottiVendita('vendita-prodotti');
   if(!prodotti.length){alert('Aggiungere almeno un prodotto');return;}
-  // Verifica giacenze
-  for(var k=0;k<prodotti.length;k++){
-    var p=prodotti[k];
-    if(giacenze[p.nome]){
-      var fi=FMT.indexOf(p.fmt);
-      if(fi>=0&&giacenze[p.nome].qt[fi]<p.qt){
-        alert('Giacenza insufficiente: '+dn(p.nome)+' '+p.fmt+'L - Disponibili: '+giacenze[p.nome].qt[fi]);
-        return;
-      }
-    }
+  // In modifica: storna temporaneamente la vendita originale prima del controllo
+  var vOrig=(_editingVenditaIdx!==null)?vendite[_editingVenditaIdx]:null;
+  function _movimento(lista,segno){
+    lista.forEach(function(p){
+      if(giacenze[p.nome]){var fi=FMT.indexOf(p.fmt);if(fi>=0)giacenze[p.nome].qt[fi]+=segno*p.qt;}
+    });
+  }
+  if(vOrig) _movimento(vOrig.prodotti,+1);
+  // Verifica giacenze (righe dello stesso prodotto/formato sommate)
+  var errG=verificaGiacenzaAggregata(prodotti);
+  if(errG){
+    if(vOrig) _movimento(vOrig.prodotti,-1); // annulla lo storno temporaneo
+    alert(errG);
+    return;
   }
   // Applica scarico
   prodotti.forEach(function(p){
@@ -4054,6 +4212,7 @@ function salvaVendita(){
 function eliminaVendita(i){
   var v=vendite[i];
   if(!v){alert('Vendita non trovata');return;}
+  if(_editingVenditaIdx!==null){alert('Chiudi prima il modulo di modifica aperto, poi elimina.');return;}
   if(!confirm('Eliminare questa vendita?\nLa giacenza verra ripristinata.'))return;
   v.prodotti.forEach(function(p){
     if(giacenze[p.nome]){var fi=FMT.indexOf(p.fmt);if(fi>=0)giacenze[p.nome].qt[fi]+=p.qt;}
@@ -4066,7 +4225,7 @@ function eliminaVendita(i){
 
 // ===================== CONTRASSEGNI =====================
 function openCaricoContrassegni(){
-  document.getElementById('con-data').value=new Date().toISOString().slice(0,10);
+  document.getElementById('con-data').value=oggiISO();
   document.getElementById('con-doc').value='';
   document.getElementById('con-note').value='';
   document.getElementById('con-serie-list').innerHTML='';
@@ -4180,7 +4339,14 @@ function salvaCaricoContrassegni(){
     var a=parseInt(r.querySelector('.cs-a').value)||0;
     var uuid=r.dataset.uuid||uuidv4(); // usa UUID stabile del div
     if(!nome){alert('Inserisci il nome della serie');errore=true;return;}
+    if(da<1||a<1){alert('La serie "'+nome+'": inserisci numeri Da e A validi (da 1 in su).');errore=true;return;}
     if(a<da){alert('La serie "'+nome+'" ha A < DA. Correggi.');errore=true;return;}
+    // Stessa serie e formato con numeri sovrapposti a una già caricata (o in questo stesso carico)
+    var esistenti=[];
+    contrassegniCarichi.forEach(function(c){ (c.serie||[]).forEach(function(s){ esistenti.push(s); }); });
+    serie.forEach(function(s){ esistenti.push(s); });
+    var dup=esistenti.filter(function(s){ return s.uuid!==uuid&&s.fmtIdx===fmtIdx&&(s.nome||'').toLowerCase()===nome.toLowerCase()&&(s.tipo||'')===tipo&&!(a<s.da||da>s.a); })[0];
+    if(dup){alert('La serie "'+tipo+'·'+nome+'" '+FMT_L[fmtIdx]+' Da '+da+' A '+a+' si sovrappone a una già caricata (Da '+dup.da+' A '+dup.a+').');errore=true;return;}
     serie.push({uuid:uuid,fmtIdx:fmtIdx,tipo:tipo,nome:nome,da:da,a:a});
   });
   if(errore) return;
@@ -4190,6 +4356,11 @@ function salvaCaricoContrassegni(){
 }
 
 function eliminaCaricoContrassegni(i){
+  var car=contrassegniCarichi[i]; if(!car) return;
+  var ids=(car.serie||[]).map(function(s,si){ return s.uuid||(i+'_'+si); });
+  var viaUso=[];
+  lotti.forEach(function(l){ if(l.prodotti.some(function(p){ return ids.indexOf(p.serieId)>=0; })) viaUso.push(l.via); });
+  if(viaUso.length){ alert('Questo carico contiene serie già usate nelle VIA '+viaUso.join(', ')+'.\nNon può essere eliminato: prima modifica o elimina quelle VIA.'); return; }
   if(!confirm('Eliminare questo carico contrassegni?'))return;
   contrassegniCarichi.splice(i,1);salva();renderContrassegni();
 }
@@ -4248,7 +4419,7 @@ function mostraDisponibiliFormato(fi){
       var row=document.createElement('div');
       row.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #e8d8f8';
       var left=document.createElement('div');
-      left.innerHTML='<strong>'+s.nome+'</strong> <span style="color:#9c9890;font-size:11px">Tipo '+s.tipo+'</span>'+
+      left.innerHTML='<strong>'+escHtml(s.nome)+'</strong> <span style="color:#9c9890;font-size:11px">Tipo '+s.tipo+'</span>'+
         '<br><span style="font-family:monospace;font-size:11px;color:#6b6057">Da '+s.da+' a '+s.a+'</span>';
       var right=document.createElement('div');
       right.style.textAlign='right';
@@ -4332,7 +4503,7 @@ function renderContrassegni(){
           rows+='<tr>'+
             '<td style="font-family:monospace;font-size:12px">'+(c.data||'—')+'</td>'+
             '<td><span class="badge badge-contrassegno">+ Carico</span></td>'+
-            '<td style="font-size:12px">'+(c.doc||'—')+' <em style="color:#9c9890">(vecchio)</em></td>'+
+            '<td style="font-size:12px">'+escHtml(c.doc||'—')+' <em style="color:#9c9890">(vecchio)</em></td>'+
             '<td><span class="badge" style="background:var(--cream2);color:var(--purple)">'+FMT_L[fi2]+'</span></td>'+
             '<td>—</td><td>—</td><td>—</td><td>—</td>'+
             '<td class="qty-num" style="color:var(--green)">+'+q+'</td>'+
@@ -4406,10 +4577,10 @@ function renderContrassegni(){
       rows+='<tr>'+
         '<td style="font-family:monospace;font-size:12px">'+(c.data||'—')+'</td>'+
         '<td><span class="badge badge-contrassegno">+ Carico</span></td>'+
-        '<td style="font-size:12px">'+(c.doc||'—')+'</td>'+
+        '<td style="font-size:12px">'+escHtml(c.doc||'—')+'</td>'+
         '<td><span class="badge" style="background:var(--cream2);color:var(--purple)">'+FMT_L[s.fmtIdx]+'</span></td>'+
         '<td style="font-family:monospace;font-size:12px;font-weight:500">Tipo '+s.tipo+'</td>'+
-        '<td style="font-family:monospace;font-size:12px">'+s.nome+'</td>'+
+        '<td style="font-family:monospace;font-size:12px">'+escHtml(s.nome)+'</td>'+
         '<td class="qty-num">'+s.da+'</td>'+
         '<td class="qty-num">'+s.a+'</td>'+
         '<td class="qty-num" style="color:var(--green)">+'+tot+'</td>'+
@@ -4418,7 +4589,7 @@ function renderContrassegni(){
         '<td style="font-size:11px;color:#6b6057;white-space:nowrap">'+
           '<button class="btn-storico" id="btn_'+storicoId+'" data-storico="'+storicoId+'">📋 Storico</button>'+
           elimBtn+
-          '<span style="display:block;margin-top:2px">'+(c.note||'')+'</span>'+
+          '<span style="display:block;margin-top:2px">'+escHtml(c.note||'')+'</span>'+
         '</td>'+
       '</tr>'+
       '<tr id="'+storicoId+'" class="serie-storico">'+
@@ -4575,7 +4746,8 @@ function rcCalcolaSerieAutomatiche(){
           if(sg.da === s.da && sg.a === s.a){
             // Cerca il grado: prima in giacenze, poi nella ricetta
             var g2 = 0;
-            if(giacenze[p.nome] && giacenze[p.nome].grado) g2 = giacenze[p.nome].grado;
+            if(p.ric && p.ric.g) g2 = p.ric.g; // grado della ricetta con cui è stata fatta la VIA
+            else if(giacenze[p.nome] && giacenze[p.nome].grado) g2 = giacenze[p.nome].grado;
             else {
               // prova a trovare per chiave parziale
               var keys = Object.keys(giacenze);
@@ -4608,11 +4780,21 @@ function rcCalcolaSerieAutomatiche(){
     });
   });
 
-  // Aggiungi righe manuali in coda
-  manuali.forEach(function(r){ RC_SERIE.push(r); });
+  // Una riga automatica corretta a mano prende il posto di quella ricalcolata (niente doppioni)
+  var usate={};
+  RC_SERIE=RC_SERIE.map(function(r){
+    var k=_rcChiave(r);
+    for(var mi=0;mi<manuali.length;mi++){
+      if(!usate[mi]&&manuali[mi].chiaveOrig===k){ usate[mi]=true; return manuali[mi]; }
+    }
+    return r;
+  });
+  // Righe aggiunte a mano in coda
+  manuali.forEach(function(r,mi){ if(!usate[mi]) RC_SERIE.push(r); });
 
   rcRenderSerie();
 }
+function _rcChiave(r){ return r.serie+'|'+r.fmt+'|'+r.da+'|'+r.a; }
 
 function rcAggiornaGiacenza(){
   var m = calcolaMagazzino();
@@ -4851,6 +5033,8 @@ function rcRenderSerie(){
 
 function rcSerieSave(i,campo,val){
   if(!RC_SERIE[i]) return;
+  // Ricorda da quale riga automatica nasce: al ricalcolo sostituisce quella invece di duplicarla
+  if(RC_SERIE[i].auto&&!RC_SERIE[i].chiaveOrig) RC_SERIE[i].chiaveOrig=_rcChiave(RC_SERIE[i]);
   RC_SERIE[i][campo]=val;
   RC_SERIE[i].auto=false; // modificata manualmente
   var totIdr=0, totAni=0;
@@ -5084,12 +5268,13 @@ function segmentiLiberi(serieId, currentRow){
   var occupati=[];
 
   // Da lotti salvati (escludi quello in modifica)
-  lotti.forEach(function(l,li){
-    if(_editingViaIdx!==null&&li===_editingViaIdx) return;
+  lotti.forEach(function(l){
+    if(_editingViaRef&&l===_editingViaRef) return;
     l.prodotti.forEach(function(p){
-      if(p.serieId===serieId&&p.conDa!=null&&p.conA!=null){
-        occupati.push({da:p.conDa, a:p.conA});
-      }
+      if(p.serieId!==serieId) return;
+      // Tratti effettivamente usati (non l'intervallo dal primo all'ultimo)
+      var sgs=p.segmenti&&p.segmenti.length?p.segmenti:(p.conDa!=null&&p.conA!=null?[{da:p.conDa,a:p.conA}]:[]);
+      sgs.forEach(function(sg){ occupati.push({da:sg.da, a:sg.a}); });
     });
   });
 
@@ -5169,8 +5354,8 @@ function prossimoDA(serieId, currentRow){
 // Esclude opzionalmente un lotto (per editing)
 function rangeConflitto(serieId,da,a){
   var conflitti=[];
-  lotti.forEach(function(l,li){
-    if(_editingViaIdx!==null&&li===_editingViaIdx) return;
+  lotti.forEach(function(l){
+    if(_editingViaRef&&l===_editingViaRef) return; // la VIA in modifica non è in conflitto con se stessa
     l.prodotti.forEach(function(p){
       if(p.serieId!==serieId) return;
       var pSegs=p.segmenti&&p.segmenti.length?p.segmenti:(p.conDa&&p.conA?[{da:p.conDa,a:p.conA}]:[]);
@@ -5255,7 +5440,7 @@ function openCarico(){
   var fp=document.getElementById('c-fornitore-pill');if(fp)fp.innerHTML='';
   var fi=document.getElementById('c-fornitore-id');if(fi)fi.value='';
   document.getElementById('c-fornitore').value='';
-  document.getElementById('c-data').value=new Date().toISOString().slice(0,10);
+  document.getElementById('c-data').value=oggiISO();
   document.getElementById('c-ddt').value='';
   document.getElementById('c-tipo').value='alcol';
   aggiornaCampiCarico();
@@ -5311,7 +5496,7 @@ function renderCarichi(){
     html+='<div class="card"><div class="card-header">';
     html+='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
     html+='<span class="badge badge-via">'+(tipoLabel[c.tipo]||c.tipo)+'</span>';
-    html+='<span style="font-weight:500">'+c.fornitore+'</span>';
+    html+='<span style="font-weight:500">'+escHtml(c.fornitore)+'</span>';
     html+='<span class="tag">'+(c.data||'—')+'</span>';
     if(c.ddt) html+='<span class="tag">DDT '+c.ddt+'</span>';
     html+='<span class="tag '+(tipoBadge[c.tipo]||'')+'">Idr: '+c.idr.toFixed(3)+' L</span>';
@@ -5574,6 +5759,12 @@ function chiudiEsercizio(){
     msg+='L\'anno corrente verrà impostato a '+annoNuovo+'.';
     if(haGiaAnno) msg+='\n\n⚠️ Attenzione: l\'anno '+annoNuovo+' ha già giacenze iniziali che verranno sovrascritte.';
     if(!confirm(msg)) return;
+    // Movimenti già registrati nel nuovo anno: le loro variazioni di giacenza andrebbero perse
+    var inAnno=function(d){ return (d||'').substring(0,4)===annoNuovo; };
+    var nMov=lotti.filter(function(l){return inAnno(l.data);}).length+
+      vendite.filter(function(v){return inAnno(v.data);}).length+
+      scontriniGruppi.filter(function(s){return inAnno(s.dataDa);}).length;
+    if(nMov>0&&!confirm('⚠️ ATTENZIONE: ci sono già '+nMov+' movimenti (VIA, vendite o scontrini) datati '+annoNuovo+'.\n\nChiudendo ora, le giacenze del '+annoNuovo+' verranno sostituite con quelle finali del '+annoChiusura+' e l\'effetto di quei movimenti sulle giacenze andrà perso: dovrai ricontrollarle a mano.\n\nProcedere comunque?')) return;
 
     // Salva le giacenze finali come giacenze iniziali del nuovo anno
     giacenzePerAnno[annoNuovo]=gFin;
@@ -5758,16 +5949,16 @@ function renderAnagrafica(){
     html+='<div style="flex:1;min-width:200px">';
     html+='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">';
     html+='<span class="'+tipoCls[a.tipo||'cliente']+'">'+tipoLabel[a.tipo||'cliente']+'</span>';
-    html+='<span style="font-weight:600;font-size:15px">'+a.ragione+'</span>';
-    if(a.referente) html+='<span style="font-size:12px;color:#6b6057">— '+a.referente+'</span>';
+    html+='<span style="font-weight:600;font-size:15px">'+escHtml(a.ragione)+'</span>';
+    if(a.referente) html+='<span style="font-size:12px;color:#6b6057">— '+escHtml(a.referente)+'</span>';
     html+='</div>';
     var tags=[];
-    if(a.tel) tags.push('📞 '+a.tel);
-    if(a.piva) tags.push('P.IVA: '+a.piva);
-    if(a.cf) tags.push('CF: '+a.cf);
-    if(a.sdi) tags.push('SDI: '+a.sdi);
-    if(indir) tags.push('📍 '+indir);
-    if(a.note) tags.push('📝 '+a.note);
+    if(a.tel) tags.push('📞 '+escHtml(a.tel));
+    if(a.piva) tags.push('P.IVA: '+escHtml(a.piva));
+    if(a.cf) tags.push('CF: '+escHtml(a.cf));
+    if(a.sdi) tags.push('SDI: '+escHtml(a.sdi));
+    if(indir) tags.push('📍 '+escHtml(indir));
+    if(a.note) tags.push('📝 '+escHtml(a.note));
     if(tags.length) html+='<div style="display:flex;gap:6px;flex-wrap:wrap">'+tags.map(function(t){return '<span class="tag">'+t+'</span>';}).join('')+'</div>';
     html+='</div>';
     html+='<button class="btn btn-sm btn-edit" data-action="modifica" data-id="'+a.id+'">✏️ Modifica</button>';
@@ -5794,9 +5985,9 @@ function cercaAnagVendita(){
   if(!lista.length){dd.style.display='none';return;}
   var html='';
   lista.forEach(function(a){
-    html+='<div class="anag-search-item" data-id="'+a.id+'" data-ragione="'+a.ragione.replace(/"/g,'&quot;')+'">';
-    html+='<div class="as-main">'+a.ragione+'</div>';
-    html+='<div class="as-sub">'+(a.referente?a.referente+' · ':'')+tipoTagStr(a.tipo)+(a.piva?' · P.IVA '+a.piva:'')+'</div>';
+    html+='<div class="anag-search-item" data-id="'+a.id+'" data-ragione="'+escHtml(a.ragione)+'">';
+    html+='<div class="as-main">'+escHtml(a.ragione)+'</div>';
+    html+='<div class="as-sub">'+(a.referente?escHtml(a.referente)+' · ':'')+tipoTagStr(a.tipo)+(a.piva?' · P.IVA '+escHtml(a.piva):'')+'</div>';
     html+='</div>';
   });
   dd.innerHTML=html;
@@ -5815,7 +6006,7 @@ function selezionaAnagVendita(id,ragione){
   var dd=document.getElementById('v-cliente-dropdown');
   if(dd) dd.style.display='none';
   var pill=document.getElementById('v-cliente-pill');
-  if(pill) pill.innerHTML='<div class="anag-sel-pill"><span>'+ragione+'</span><span class="pill-x" onclick="resetAnagVendita()">✕</span></div>';
+  if(pill) pill.innerHTML='<div class="anag-sel-pill"><span>'+escHtml(ragione)+'</span><span class="pill-x" onclick="resetAnagVendita()">✕</span></div>';
 }
 
 function resetAnagVendita(){
@@ -5840,9 +6031,9 @@ function cercaAnagCarico(){
   if(!lista.length){dd.style.display='none';return;}
   var html='';
   lista.forEach(function(a){
-    html+='<div class="anag-search-item" data-id="'+a.id+'" data-ragione="'+a.ragione.replace(/"/g,'&quot;')+'">';
-    html+='<div class="as-main">'+a.ragione+'</div>';
-    html+='<div class="as-sub">'+(a.referente?a.referente+' · ':'')+tipoTagStr(a.tipo)+(a.piva?' · P.IVA '+a.piva:'')+'</div>';
+    html+='<div class="anag-search-item" data-id="'+a.id+'" data-ragione="'+escHtml(a.ragione)+'">';
+    html+='<div class="as-main">'+escHtml(a.ragione)+'</div>';
+    html+='<div class="as-sub">'+(a.referente?escHtml(a.referente)+' · ':'')+tipoTagStr(a.tipo)+(a.piva?' · P.IVA '+escHtml(a.piva):'')+'</div>';
     html+='</div>';
   });
   dd.innerHTML=html;
@@ -5861,7 +6052,7 @@ function selezionaAnagCarico(id,ragione){
   var dd=document.getElementById('c-fornitore-dropdown');
   if(dd) dd.style.display='none';
   var pill=document.getElementById('c-fornitore-pill');
-  if(pill) pill.innerHTML='<div class="anag-sel-pill"><span>'+ragione+'</span><span class="pill-x" onclick="resetAnagCarico()">✕</span></div>';
+  if(pill) pill.innerHTML='<div class="anag-sel-pill"><span>'+escHtml(ragione)+'</span><span class="pill-x" onclick="resetAnagCarico()">✕</span></div>';
 }
 
 function resetAnagCarico(){
@@ -5916,8 +6107,8 @@ function openGruppoScontrini(idx){
   } else {
     if(title) title.textContent='Nuovo gruppo scontrini';
     document.getElementById('sc-periodo').value='';
-    document.getElementById('sc-data-da').value=new Date().toISOString().slice(0,10);
-    document.getElementById('sc-data-a').value=new Date().toISOString().slice(0,10);
+    document.getElementById('sc-data-da').value=oggiISO();
+    document.getElementById('sc-data-a').value=oggiISO();
     document.getElementById('sc-num-scontrini').value='';
     document.getElementById('sc-note').value='';
     var cont2=document.getElementById('sc-prodotti');
@@ -5983,18 +6174,8 @@ function salvaGruppoScontrini(){
       if(giacenze[p.nome]){var fi=FMT.indexOf(p.fmt);if(fi>=0)giacenze[p.nome].qt[fi]+=p.qt;}
     });
   }
-  // Verifica giacenze (dopo lo storno, così la giacenza disponibile è corretta)
-  var insufficiente=null;
-  for(var k=0;k<prodotti.length;k++){
-    var p=prodotti[k];
-    if(giacenze[p.nome]){
-      var fi=FMT.indexOf(p.fmt);
-      if(fi>=0&&giacenze[p.nome].qt[fi]<p.qt){
-        insufficiente='Giacenza insufficiente: '+dn(p.nome)+' '+p.fmt+'L - Disponibili: '+giacenze[p.nome].qt[fi];
-        break;
-      }
-    }
-  }
+  // Verifica giacenze (dopo lo storno; righe dello stesso prodotto/formato sommate)
+  var insufficiente=verificaGiacenzaAggregata(prodotti);
   if(insufficiente){
     // Ripristina lo storno se la verifica fallisce
     if(_editingScIdx!==null&&_editingScIdx!==undefined&&_editingScIdx>=0){
@@ -6032,6 +6213,7 @@ function salvaGruppoScontrini(){
 function eliminaGruppoScontrini(i){
   var s=scontriniGruppi[i];
   if(!s) return;
+  if(_editingScIdx!==null){alert('Chiudi prima il modulo di modifica aperto, poi elimina.');return;}
   if(!confirm('Eliminare il gruppo "'+s.periodo+'"?\nLa giacenza verrà ripristinata.')) return;
   (s.prodotti||[]).forEach(function(p){
     if(giacenze[p.nome]){var fi=FMT.indexOf(p.fmt);if(fi>=0)giacenze[p.nome].qt[fi]+=p.qt;}
@@ -6062,12 +6244,12 @@ function renderScontrini(){
     html+='<div class="sc-group-card">';
     html+='<div class="sc-group-header">';
     html+='<div>';
-    html+='<div class="sc-periodo">'+s.periodo+'</div>';
+    html+='<div class="sc-periodo">'+escHtml(s.periodo)+'</div>';
     html+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">';
     if(s.dataDa||s.dataA) html+='<span class="tag">'+(s.dataDa||'?')+' → '+(s.dataA||'?')+'</span>';
     if(s.numScontrini) html+='<span class="sc-badge">'+s.numScontrini+' scontrini</span>';
     html+='<span class="tag">'+totBot+' bottiglie · '+totLt.toFixed(2)+' L</span>';
-    if(s.note) html+='<span class="tag">📝 '+s.note+'</span>';
+    if(s.note) html+='<span class="tag">📝 '+escHtml(s.note)+'</span>';
     html+='</div></div>';
     html+='<div style="display:flex;gap:6px">';
     html+='<button class="btn btn-sm btn-edit" data-action="modifica" data-idx="'+i+'">✏️ Modifica</button>';
@@ -6216,37 +6398,55 @@ function generaHtmlAggiornato(){
     lotti:lotti,vendite:vendite,
     carichi:carichi,contrassegniCarichi:contrassegniCarichi,ricetteCustom:ricetteCustom,
     anagrafica:anagrafica,scontriniGruppi:scontriniGruppi};
-  var html=document.documentElement.outerHTML;
-  var nuovoBlocco='var _DATI_INCORPORATI = '+JSON.stringify(dati)+';';
-
-  // Usa split+join per evitare che $ nel JSON venga interpretato come metacarattere
-  var placeholder='var _DATI_INCORPORATI = null;';
-  if(html.indexOf(placeholder)>=0){
-    return html.split(placeholder).join(nuovoBlocco);
+  var html='<!DOCTYPE html>\n'+document.documentElement.outerHTML;
+  // '<' codificato come \u003c: un testo con il tag di chiusura script non può chiudere lo script
+  var nuovoBlocco='var _DATI_INCORPORATI'+' = '+JSON.stringify(dati).replace(/</g,'\\u003c')+';';
+  // Stringhe costruite per concatenazione: così non compaiono letteralmente nel codice
+  // e il replace sostituisce SOLO la dichiarazione dei dati.
+  var placeholder='var _DATI_INCORPORATI'+' = null;';
+  var marker='var _DATI_INCORPORATI'+' = ';
+  var startIdx=html.indexOf(placeholder);
+  if(startIdx>=0){
+    return html.slice(0,startIdx)+nuovoBlocco+html.slice(startIdx+placeholder.length);
   }
-
-  // File già salvato: cerca il marker di inizio e trova la fine con indexOf
-  var marker='var _DATI_INCORPORATI = ';
-  var startIdx=html.indexOf(marker);
+  // File già salvato: sostituisce il blocco dati esistente
+  startIdx=html.indexOf(marker);
   if(startIdx<0) return html; // non trovato, restituisce invariato
-  // Trova il ';' che chiude la dichiarazione (dopo il JSON object)
-  // Il JSON inizia con '{' - troviamo la } bilanciata
   var jsonStart=startIdx+marker.length;
-  if(html[jsonStart]!=='{') return html.split(placeholder).join(nuovoBlocco);
-  var depth=0; var j=jsonStart;
-  while(j<html.length){
-    if(html[j]==='{') depth++;
-    else if(html[j]==='}'){depth--;if(depth===0){j++;break;}}
-    j++;
+  var fine=_fineOggettoJson(html,jsonStart);
+  if(fine<0) return null; // blocco dati illeggibile: meglio non salvare che corrompere
+  // salta il ';' finale
+  if(html[fine]===';') fine++;
+  return html.slice(0,startIdx)+nuovoBlocco+html.slice(fine);
+}
+// Trova la fine di un oggetto JSON che inizia in text[start] ('{'), ignorando
+// le graffe dentro le stringhe. Ritorna l'indice subito dopo la '}' finale, o -1.
+function _fineOggettoJson(text,start){
+  if(text[start]!=='{') return -1;
+  var depth=0,inStr=false,esc=false;
+  for(var j=start;j<text.length;j++){
+    var c=text[j];
+    if(inStr){
+      if(esc) esc=false;
+      else if(c==='\\') esc=true;
+      else if(c==='"') inStr=false;
+      continue;
+    }
+    if(c==='"') inStr=true;
+    else if(c==='{') depth++;
+    else if(c==='}'){depth--; if(depth===0) return j+1;}
   }
-  // j ora punta al carattere dopo '}', dovrebbe essere ';'
-  return html.slice(0,startIdx)+nuovoBlocco+html.slice(j+1);
+  return -1;
 }
 
 // Salvataggio automatico nel file (File System Access API)
+var _salvaDiNuovo=false;
 async function salvaAutomatico(){
-  if(_salvaggioInCorso) return;
+  // Se un salvataggio è già in corso, ne accoda un altro: le modifiche fatte
+  // nel frattempo non vengono perse.
+  if(_salvaggioInCorso){ _salvaDiNuovo=true; return; }
   _salvaggioInCorso=true;
+  _salvaDiNuovo=false;
   var btn=document.getElementById('btn-salva-file');
   try {
     if(!_fileHandle){
@@ -6256,17 +6456,23 @@ async function salvaAutomatico(){
         types:[{description:'File HTML',accept:{'text/html':['.html']}}]
       });
     }
+    var modificheAllInizio=_modificheNonSalvate;
     var html=generaHtmlAggiornato();
+    if(!html) throw new Error('Blocco dati nel file non leggibile');
     var writable=await _fileHandle.createWritable();
     await writable.write(html);
     await writable.close();
-    _modificheNonSalvate=0;
+    // Azzera solo se nel frattempo non ci sono state altre modifiche
+    if(_modificheNonSalvate===modificheAllInizio) _modificheNonSalvate=0;
+    else _salvaDiNuovo=true;
     aggiornaIndicatoreSalvataggio();
   } catch(e){
     // Utente ha annullato o errore
-    if(e.name!=='AbortError') console.error('Errore salvataggio:',e);
+    if(e.name!=='AbortError'){ console.error('Errore salvataggio:',e); alert('Salvataggio nel file non riuscito: '+e.message+'\nUsa Backup JSON come alternativa.'); }
+    _salvaDiNuovo=false;
   }
   _salvaggioInCorso=false;
+  if(_salvaDiNuovo) salvaAutomatico();
 }
 
 // Apri file esistente (File System Access API)
@@ -6280,23 +6486,17 @@ async function apriFile(){
     var file=await handle.getFile();
     var text=await file.text();
     // Estrai i dati incorporati usando indexOf e bilanciamento parentesi
-    var marker2='var _DATI_INCORPORATI = ';
+    var marker2='var _DATI_INCORPORATI'+' = ';
     var si=text.indexOf(marker2);
     var datiEstratti=null;
     if(si>=0){
-      var js2=text.slice(si+marker2.length);
-      if(js2[0]==='{'){
-        var dep=0,ji=0;
-        while(ji<js2.length){
-          if(js2[ji]==='{') dep++;
-          else if(js2[ji]==='}'){dep--;if(dep===0){ji++;break;}}
-          ji++;
-        }
-        try{datiEstratti=JSON.parse(js2.slice(0,ji));}catch(e){}
-      }
+      var js0=si+marker2.length;
+      var fine2=_fineOggettoJson(text,js0);
+      if(fine2>0){ try{datiEstratti=JSON.parse(text.slice(js0,fine2));}catch(e){} }
     }
     if(datiEstratti){
       _applicaDati(datiEstratti);
+      _dopoCaricamento();
       _modificheNonSalvate=0;
       salva(); renderAll();
       aggiornaIndicatoreSalvataggio();
@@ -6355,7 +6555,7 @@ function iniziaLogin(){
   }
   // Controlla se c'è già una sessione valida (stessa giornata)
   var sess=''; try{ sess=localStorage.getItem(_SESSION_KEY)||''; }catch(e){}
-  var oggi=new Date().toISOString().slice(0,10);
+  var oggi=oggiISO();
   if(sess===oggi+':'+hash){
     document.getElementById('login-screen').style.display='none';
     return;
@@ -6367,7 +6567,7 @@ function verificaLogin(){
   var hash=''; try{ hash=localStorage.getItem(_PWD_KEY)||''; }catch(e){}
   var val=document.getElementById('login-pwd').value;
   if(hashSemplice(val)===hash){
-    var oggi=new Date().toISOString().slice(0,10);
+    var oggi=oggiISO();
     try{ localStorage.setItem(_SESSION_KEY,oggi+':'+hash); }catch(e){}
     document.getElementById('login-screen').style.display='none';
     document.getElementById('login-err').textContent='';
@@ -6399,7 +6599,7 @@ function salvaPassword(){
   if(nw!==conf){ st.style.color='#c0392b'; st.textContent='Le due password non coincidono.'; return; }
   var newHash=hashSemplice(nw);
   try{ localStorage.setItem(_PWD_KEY,newHash); }catch(e){}
-  var oggi=new Date().toISOString().slice(0,10);
+  var oggi=oggiISO();
   try{ localStorage.setItem(_SESSION_KEY,oggi+':'+newHash); }catch(e){}
   st.style.color='#2d5a3d'; st.textContent='✓ Password salvata!';
   setTimeout(function(){ chiudiImpostazioniPassword(); },1200);
@@ -6482,32 +6682,30 @@ function sincronizzaGist(){
   }
   var btn=document.getElementById('btn-gist-menu');
   if(btn){ btn.textContent='↻ Sincronizzazione...'; btn.disabled=true; }
-  var payload={}; payload[c.file]={"content":JSON.stringify(raccogliDatiExport(),null,2)};
-  var body=JSON.stringify({"files":payload});
-  var url='https://api.github.com/gists/'+c.id;
-  var xhr=new XMLHttpRequest();
-  xhr.open('PATCH',url);
-  xhr.setRequestHeader('Authorization','token '+c.token);
-  xhr.setRequestHeader('Accept','application/vnd.github.v3+json');
-  xhr.setRequestHeader('Content-Type','application/json');
-  xhr.onload=function(){
+  _inviaGist(function(ok,err){
     if(btn){ btn.textContent='☁ Sincronizza Gist'; btn.disabled=false; }
-    if(xhr.status===200){
-      alert('✓ Dati sincronizzati su Gist con successo!');
-    } else {
-      alert('Errore sincronizzazione ('+xhr.status+'). Verifica la configurazione.');
-    }
-  };
-  xhr.onerror=function(){
-    if(btn){ btn.textContent='☁ Sincronizza Gist'; btn.disabled=false; }
-    alert('Errore di rete durante la sincronizzazione.');
-  };
-  xhr.send(body);
+    if(ok){ _mostraStatoSync(true,'✓ Sincronizzato'); alert('✓ Dati sincronizzati su Gist con successo!'); }
+    else { _mostraStatoSync(false,'⚠ Gist non sincronizzato — '+err); alert('Sincronizzazione non riuscita: '+err+'.\nI dati restano salvati su questo dispositivo.'); }
+  });
 }
 
 function caricaDaGist(callback){
   var c=gistConf();
   if(!c.id||!c.token){ if(callback) callback(false); return; }
+  if(_syncPendente()&&_DATI_INCORPORATI){
+    // Dati caricati da un file salvato (potrebbe essere una copia vecchia):
+    // non si sovrascrive il Gist in automatico, decide l'utente.
+    if(callback) callback(false,'dati aperti da file: per inviarli al Gist usa "Sincronizza Gist" dal menu ⋯');
+    return;
+  }
+  if(_syncPendente()){
+    // Su questo dispositivo ci sono modifiche non ancora arrivate al Gist:
+    // il Gist è più vecchio, quindi si inviano i dati locali invece di scaricare.
+    _inviaGist(function(ok,err){
+      if(callback) callback(ok, ok?null:('modifiche locali non ancora inviate — '+err), ok?'↑ Modifiche locali inviate al Gist':null);
+    });
+    return;
+  }
   var url='https://api.github.com/gists/'+c.id;
   var xhr=new XMLHttpRequest();
   xhr.open('GET',url);
@@ -6542,8 +6740,11 @@ function caricaDaGist(callback){
 }
 
 function applicaDatiGist(d){
+  // Se nel frattempo sono state fatte modifiche locali, non sovrascriverle
+  if(_syncPendente()){ _inviaGist(); return; }
   _applicaDati(d);
-  salva();
+  _dopoCaricamento();
+  salva(true);
   renderAll();
 }
 
@@ -6560,6 +6761,7 @@ document.addEventListener('click',function(){chiudiBackupMenu();});
 // ===================== INIT =====================
 initGiacenze();
 carica();
+_dopoCaricamento();
 iniziaLogin();
 renderAll();
 aggiornaCampiCarico();
@@ -6577,8 +6779,8 @@ setTimeout(function(){
   banner.textContent='↻ Caricamento dati da Gist...';
   document.body.appendChild(banner);
   setTimeout(function(){ banner.style.opacity='1'; },50);
-  caricaDaGist(function(ok,err){
-    banner.textContent=ok?'✓ Dati aggiornati dal Gist':('⚠ Gist: '+(err||'errore'));
+  caricaDaGist(function(ok,err,msgOk){
+    banner.textContent=ok?(msgOk||'✓ Dati aggiornati dal Gist'):('⚠ Gist: '+(err||'errore'));
     banner.style.borderColor=ok?'var(--green-light)':'#e07b5a';
     setTimeout(function(){
       banner.style.opacity='0';
