@@ -959,6 +959,10 @@ header .btn[onclick*="toggleBackupMenu"] {
   body.stampa-via-attiva #print-modal > div{margin:0!important;padding:0!important;max-width:none!important;box-shadow:none!important}
   body.stampa-via-attiva #print-modal .btn{display:none!important}
 }
+/* Scheda con solo l'intestazione: niente linea separatrice vuota */
+.card > .card-header:first-child:last-child{border-bottom:none;padding-bottom:0;margin-bottom:0}
+/* Riga totale: l'etichetta nello stesso carattere delle altre righe, i numeri restano monospazio */
+.tot-row td:first-child{font-family:'Inter','Segoe UI',system-ui,sans-serif;font-size:13px;font-weight:600}
 /* ── TIPOGRAFIA UNIFORME ─────────────────────────────────────────────
    Molti testi hanno ancora font-family scritto inline (Courier New,
    Georgia): li riportiamo ai font del gestionale senza toccare l'HTML. */
@@ -5659,7 +5663,7 @@ function renderCarichi(){
     html+='<span class="badge badge-via">'+(tipoLabel[c.tipo]||c.tipo)+'</span>';
     html+='<span style="font-weight:500">'+escHtml(c.fornitore)+'</span>';
     html+='<span class="tag">'+(c.data||'—')+'</span>';
-    if(c.ddt) html+='<span class="tag">DDT '+c.ddt+'</span>';
+    if(c.ddt) html+='<span class="tag">DDT '+escHtml(c.ddt)+'</span>';
     html+='<span class="tag '+(tipoBadge[c.tipo]||'')+'">Idr: '+c.idr.toFixed(3)+' L</span>';
     html+='<span class="tag '+(tipoBadge[c.tipo]||'')+'">Ani: '+c.ani.toFixed(3)+' L</span>';
     if(c.tipo==='alcol') html+='<span class="tag">coeff. '+c.coeff+'</span>';
@@ -6473,7 +6477,7 @@ function renderHome(){
   var now=new Date();
   var dtEl=document.getElementById('home-datetime');
   if(dtEl){
-    var giorni=['Domenica','Lunedi','Martedi','Mercoledi','Giovedi','Venerdi','Sabato'];
+    var giorni=['Domenica','Lunedì','Martedì','Mercoledì','Giovedì','Venerdì','Sabato'];
     var mesi=['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno','Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre'];
     dtEl.innerHTML=giorni[now.getDay()]+'<br>'+now.getDate()+' '+mesi[now.getMonth()]+' '+now.getFullYear();
   }
