@@ -952,6 +952,13 @@ header .btn[onclick*="toggleBackupMenu"] {
   margin-bottom: 1rem;
 }
 
+/* ── STAMPA VIA: esce solo l'anteprima, non tutta la pagina ── */
+@media print{
+  body.stampa-via-attiva header,body.stampa-via-attiva .tabs-bar,body.stampa-via-attiva .container,body.stampa-via-attiva #sync-toast{display:none!important}
+  body.stampa-via-attiva #print-modal{position:static!important;background:none!important;overflow:visible!important}
+  body.stampa-via-attiva #print-modal > div{margin:0!important;padding:0!important;max-width:none!important;box-shadow:none!important}
+  body.stampa-via-attiva #print-modal .btn{display:none!important}
+}
 /* ── TIPOGRAFIA UNIFORME ─────────────────────────────────────────────
    Molti testi hanno ancora font-family scritto inline (Courier New,
    Georgia): li riportiamo ai font del gestionale senza toccare l'HTML. */
@@ -1857,6 +1864,14 @@ var FMT_L=["0,05L","0,10L","0,20L","0,50L","0,70L","1L","2L"];
 function dn(k){return NOMI_DISPLAY[k]||k;}
 // Data di oggi in ora locale (YYYY-MM-DD) — toISOString() usa l'ora UTC
 function oggiISO(){var d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+// Data obbligatoria e dentro l'anno aperto: i movimenti cambiano le giacenze
+// dell'anno aperto, quindi una data di un altro anno sballerebbe i conti.
+function erroreDataAnno(d,cosa){
+  if(!d) return 'Inserisci la data '+cosa+'.';
+  if(String(d).substring(0,4)!==String(annoCorrente))
+    return 'La data '+cosa+' ('+d+') non è nell\'anno aperto ('+annoCorrente+').\nPer registrare movimenti di un altro anno, cambia prima l\'anno dalla Home.';
+  return null;
+}
 // Testo utente sicuro dentro innerHTML
 function escHtml(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 // Controlla la giacenza sommando le righe dello stesso prodotto/formato. Ritorna messaggio d'errore o null.
@@ -1964,21 +1979,24 @@ function prossimVia(){if(!lotti.length) return 1; var max=0; lotti.forEach(funct
 
 // ===================== CONTRASSEGNI — GIACENZA =====================
 function giacenzaContrassegni(){
-  // Somma totali per formato dai carichi dell'anno corrente
+  // Contrassegni fisicamente disponibili alla fine dell'anno aperto:
+  // tutti i carichi fino a quest'anno (quelli degli anni prima si riportano)
+  // meno tutto il consumo delle VIA fino a quest'anno.
   var tot=[0,0,0,0,0,0,0];
   contrassegniCarichi.forEach(function(c){
-    // Filtra per anno corrente (usa campo data del carico)
     var cAnno=c.data?c.data.substring(0,4):'';
-    if(cAnno&&cAnno!==annoCorrente) return;
+    if(cAnno&&cAnno>annoCorrente) return;
     (c.serie||[]).forEach(function(s){
       var idx=s.fmtIdx;
       if(idx>=0&&idx<7) tot[idx]+=(s.a-s.da+1);
     });
+    // Carichi in formato vecchio (solo quantità per formato, senza serie)
+    if((!c.serie||!c.serie.length)&&c.qt) c.qt.forEach(function(q,i){ if(i<7) tot[i]+=(parseInt(q)||0); });
   });
-  // Sottrai consumo dai lotti dell'anno corrente
+  // Sottrai il consumo delle VIA fino all'anno aperto
   lotti.forEach(function(l){
     var lAnno=l.data?l.data.substring(0,4):'';
-    if(lAnno&&lAnno!==annoCorrente) return;
+    if(lAnno&&lAnno>annoCorrente) return;
     l.prodotti.forEach(function(p){
       var idx=FMT.findIndex(function(f){ return Math.abs(f-p.fmt)<0.001; });
       if(idx>=0) tot[idx]-=(parseInt(p.qt)||0);
@@ -2012,12 +2030,88 @@ function _mostraStatoSync(ok,msg){
   ind.style.opacity='1';
   if(ok) ind._t=setTimeout(function(){ind.style.opacity='0';},2200);
 }
-// Invia i dati locali al Gist. cb(ok, messaggio)
+// 'liq_gist_ultimo' = data/ora (campo "esportato") dell'ultima versione del Gist che
+// questo dispositivo conosce (inviata o scaricata). Se il Gist ne ha una diversa,
+// l'ha aggiornato un altro dispositivo.
+function _gistUltimo(){ try{ return localStorage.getItem('liq_gist_ultimo')||''; }catch(e){ return ''; } }
+function _setGistUltimo(v){ try{ if(v) localStorage.setItem('liq_gist_ultimo',v); }catch(e){} }
+// Legge il contenuto attuale del Gist. cb(errore, dati|null)
+function _leggiGist(cb){
+  var c=gistConf();
+  var xhr=new XMLHttpRequest();
+  xhr.open('GET','https://api.github.com/gists/'+c.id+'?t='+Date.now()); // mai dalla cache
+  xhr.setRequestHeader('Authorization','token '+c.token);
+  xhr.setRequestHeader('Accept','application/vnd.github.v3+json');
+  xhr.onload=function(){
+    if(xhr.status!==200){ cb('Errore GitHub ('+xhr.status+')'+(xhr.status===401?': token non valido o scaduto':'')); return; }
+    try{
+      var f=JSON.parse(xhr.responseText).files[c.file];
+      if(!f||!f.content){ cb(null,null); return; } // file ancora vuoto/assente: nessun conflitto
+      if(f.truncated){
+        var x2=new XMLHttpRequest(); x2.open('GET',f.raw_url);
+        x2.onload=function(){ try{ cb(null,JSON.parse(x2.responseText)); }catch(e){ cb('Gist illeggibile'); } };
+        x2.onerror=function(){ cb('Nessuna connessione'); }; x2.send(); return;
+      }
+      cb(null,JSON.parse(f.content));
+    }catch(e){ cb('Gist illeggibile'); }
+  };
+  xhr.onerror=function(){ cb('Nessuna connessione'); };
+  xhr.send();
+}
+var _conflittoGistAperto=false, _gistInCorso=false, _gistInAttesa=[];
+// Invia i dati locali al Gist, dopo aver controllato che nessun altro dispositivo
+// l'abbia aggiornato nel frattempo. cb(ok, messaggio)
 function _inviaGist(cb){
   var c=gistConf();
   if(!c.id||!c.token){ if(cb) cb(false,'Gist non configurato'); return; }
+  if(_conflittoGistAperto){ if(cb) cb(false,'in attesa della tua scelta sul conflitto'); return; }
+  // Una sola sincronizzazione alla volta: le richieste arrivate nel frattempo ne fanno UNA dopo
+  if(_gistInCorso){ _gistInAttesa.push(cb||function(){}); return; }
+  _gistInCorso=true;
+  var cbOrig=cb;
+  var fine=function(ok,err,msg){
+    _gistInCorso=false;
+    if(cbOrig) cbOrig(ok,err,msg);
+    if(_gistInAttesa.length){
+      var attesa=_gistInAttesa; _gistInAttesa=[];
+      // un solo nuovo invio per tutte le richieste arrivate nel frattempo
+      if(_syncPendente()) _inviaGist(function(o,e,m){ attesa.forEach(function(f){ f(o,e,m); }); });
+      else attesa.forEach(function(f){ f(ok,err,msg); });
+    }
+  };
+  _leggiGist(function(err,remoto){
+    if(err){ fine(false,err); return; }
+    var ultimo=_gistUltimo();
+    // Il Gist contiene una versione che questo dispositivo non conosce (anche se questo
+    // dispositivo non si è mai sincronizzato, es. file salvato vecchio o dati cancellati)
+    if(remoto&&remoto.esportato&&remoto.esportato!==ultimo){
+      _conflittoGistAperto=true;
+      var quando=remoto.esportato.replace('T',' ').substring(0,16);
+      var scarica=confirm('⚠ Il Gist è stato aggiornato da un altro dispositivo ('+quando+' UTC) dopo l\'ultima sincronizzazione di questo.\n\n'+
+        'OK = usa i dati del Gist (prima scarico un Backup JSON dei dati di questo dispositivo, così non perdi niente)\n'+
+        'Annulla = tieni i dati di questo dispositivo e sovrascrivi il Gist');
+      _conflittoGistAperto=false;
+      if(scarica){
+        // Copia di sicurezza dei dati di questo dispositivo: nel browser e come file
+        try{ localStorage.setItem('liq_backup_prima_del_gist',JSON.stringify(raccogliDatiExport())); }catch(e){}
+        try{ esportaDati(); }catch(e){}
+        _setSyncPendente(false);
+        _applicaDati(remoto); _dopoCaricamento(); salva(true); renderAll();
+        _setGistUltimo(remoto.esportato);
+        fine(true,null,'↓ Dati aggiornati dal Gist (copia dei dati precedenti salvata)');
+        return;
+      }
+      _patchGist(fine);
+      return;
+    }
+    _patchGist(fine);
+  });
+}
+function _patchGist(cb){
+  var c=gistConf();
   var versioneInviata=_versioneDati;
-  var payload={}; payload[c.file]={"content":JSON.stringify(raccogliDatiExport(),null,2)};
+  var datiExp=raccogliDatiExport();
+  var payload={}; payload[c.file]={"content":JSON.stringify(datiExp,null,2)};
   var xhr=new XMLHttpRequest();
   xhr.open('PATCH','https://api.github.com/gists/'+c.id);
   xhr.setRequestHeader('Authorization','token '+c.token);
@@ -2025,6 +2119,7 @@ function _inviaGist(cb){
   xhr.setRequestHeader('Content-Type','application/json');
   xhr.onload=function(){
     if(xhr.status===200){
+      _setGistUltimo(datiExp.esportato);
       // Togli il flag solo se nel frattempo non ci sono state altre modifiche
       if(_versioneDati===versioneInviata) _setSyncPendente(false);
       if(cb) cb(true);
@@ -2049,6 +2144,7 @@ function salva(daGist){
     localStorage.setItem('liq_anagrafica',JSON.stringify(anagrafica));
     localStorage.setItem('liq_scontrini',JSON.stringify(scontriniGruppi));
     localStorage.setItem('liq_alcol_per_anno',JSON.stringify(giacenzeAlcolPerAnno));
+    localStorage.setItem('liq_salvato_il',new Date().toISOString()); // per confronto con i file salvati
   }catch(e){
     // Prima era silenzioso: se il browser non salva, i dati restano solo in memoria
     if(!_avvisoStorageMostrato){
@@ -2066,8 +2162,8 @@ function salva(daGist){
   // Auto-sync Gist in background dopo 3 secondi di inattività
   if(typeof _gistSyncTimer!=='undefined') clearTimeout(_gistSyncTimer);
   _gistSyncTimer=setTimeout(function(){
-    _inviaGist(function(ok,err){
-      if(ok) _mostraStatoSync(true,'✓ Salvato e sincronizzato');
+    _inviaGist(function(ok,err,msgOk){
+      if(ok) _mostraStatoSync(true,msgOk||'✓ Salvato e sincronizzato');
       else _mostraStatoSync(false,'⚠ Gist non sincronizzato — '+err);
     });
   },3000);
@@ -2078,12 +2174,12 @@ function _migraVecchieGiacenze(d){
   // Se troviamo giacenze (old) ma non giacenzePerAnno (new), migriamo
   if(d.giacenze && !d.giacenzePerAnno){
     d.giacenzePerAnno={};
-    d.giacenzePerAnno[annoCorrente]=d.giacenze;
+    d.giacenzePerAnno[d.annoCorrente||annoCorrente]=d.giacenze;
   }
   // Migrazione GI_ALCOL/AROMI/CREME → giacenzeAlcolPerAnno
   if((d.GI_ALCOL||d.GI_AROMI||d.GI_CREME) && !d.giacenzeAlcolPerAnno){
     d.giacenzeAlcolPerAnno={};
-    d.giacenzeAlcolPerAnno[annoCorrente]={
+    d.giacenzeAlcolPerAnno[d.annoCorrente||annoCorrente]={
       alcol: d.GI_ALCOL||{idr:0,ani:0},
       aromi: d.GI_AROMI||{idr:0,ani:0},
       creme: d.GI_CREME||{idr:0,ani:0}
@@ -2121,8 +2217,12 @@ function _stabilizzaIdSerie(){
 }
 
 function carica(){
-  // Prima leggi i dati incorporati nel file (se presenti)
-  if(_DATI_INCORPORATI){
+  // Dati incorporati nel file, salvo che nel browser ci siano dati più recenti
+  // (modifiche fatte e non ancora salvate nel file): in quel caso valgono quelli.
+  var salvatoBrowser=''; try{ salvatoBrowser=localStorage.getItem('liq_salvato_il')||''; }catch(e){}
+  var usaFile=!!(_DATI_INCORPORATI&&!(salvatoBrowser&&_DATI_INCORPORATI.salvatoIl&&salvatoBrowser>_DATI_INCORPORATI.salvatoIl));
+  _caricatoDaFile=usaFile;
+  if(usaFile){
     try{ _applicaDati(_DATI_INCORPORATI); }catch(e){}
   } else {
     // Fallback: localStorage (solo se stesso path)
@@ -2305,6 +2405,13 @@ function leggiImport(e){
     try{
       var d=JSON.parse(ev.target.result);
       if(confirm('Importare i dati? I dati attuali verranno sostituiti.')){
+        // Sostituzione completa: le sezioni assenti nel backup vengono svuotate,
+        // così non restano dati misti tra backup e dati attuali
+        if(!d.giacenze&&!d.giacenzePerAnno){ alert('Il file non sembra un backup del gestionale (mancano le giacenze).'); return; }
+        ['lotti','vendite','carichi','contrassegniCarichi','anagrafica','scontriniGruppi'].forEach(function(k){ if(!d[k]) d[k]=[]; });
+        if(!d.ricetteCustom) d.ricetteCustom={};
+        if(!d.giacenzeAlcolPerAnno&&!d.GI_ALCOL&&!d.GI_AROMI&&!d.GI_CREME) d.giacenzeAlcolPerAnno={};
+        lotti=[];vendite=[];carichi=[];contrassegniCarichi=[];anagrafica=[];scontriniGruppi=[];ricetteCustom={};
         _applicaDati(d);
         _dopoCaricamento();
         salva(); renderAll();
@@ -2669,10 +2776,30 @@ function stampaVia(i){
   '</div>'+
   conBlock;
 
+  // Gli stili della stampa valgono solo dentro l'anteprima (prima cambiavano tutta l'app)
+  html=html.replace(/<style>([\s\S]*?)<\/style>/,function(m0,css){ return '<style>'+_limitaCss(css,'#print-body')+'</style>'; });
   document.getElementById('print-body').innerHTML=html;
   document.getElementById('print-modal').style.display='block';
+  document.body.classList.add('stampa-via-attiva'); // in stampa esce solo la VIA
 }
-function closePrintModal(){document.getElementById('print-modal').style.display='none';}
+function closePrintModal(){document.getElementById('print-modal').style.display='none';document.body.classList.remove('stampa-via-attiva');}
+// Prefissa ogni selettore CSS con "ambito" (body → ambito stesso). Gestisce @media annidati.
+function _limitaCss(css,ambito){
+  var out='',i=0;
+  while(i<css.length){
+    var a=css.indexOf('{',i); if(a<0){ out+=css.slice(i); break; }
+    var sel=css.slice(i,a).trim();
+    if(sel.charAt(0)==='@'){
+      var depth=1,j=a+1;
+      while(j<css.length&&depth>0){ if(css[j]==='{')depth++; else if(css[j]==='}')depth--; j++; }
+      out+=sel+'{'+_limitaCss(css.slice(a+1,j-1),ambito)+'}'; i=j; continue;
+    }
+    var b=css.indexOf('}',a); if(b<0) b=css.length-1;
+    var sels=sel.split(',').map(function(s){ s=s.trim(); return s==='body'?ambito:(ambito+' '+s); }).join(',');
+    out+=sels+'{'+css.slice(a+1,b)+'}'; i=b+1;
+  }
+  return out;
+}
 
 // ===================== RENDER VENDITE =====================
 function renderVendite(){
@@ -3055,7 +3182,12 @@ function eliminaRicettaEditor(){
   }
   if(!confirm("Eliminare la ricetta custom "+editorNomeOriginale+"?")) return;
   delete ricetteCustom[editorNomeOriginale];
+  // prodotto solo personalizzato: togli anche le righe di giacenza vuote
+  if(!RICETTE[nomeR]) Object.keys(giacenzePerAnno).forEach(function(a){ delete giacenzePerAnno[a][nomeR]; });
+  aggiornaAliasAnno();
   salvaRicetteCustom();
+  salva();
+  renderGiacenze();
   closeEditorRicetta();
   renderRicette();
 }
@@ -3065,8 +3197,9 @@ function salvaRicetteCustom(){
   // Non incrementa _modificheNonSalvate: viene sempre chiamata insieme a salva()
   // che gestisce già il contatore
 }
+var _caricatoDaFile=false;
 function caricaRicetteCustom(){
-  if(_DATI_INCORPORATI&&_DATI_INCORPORATI.ricetteCustom){
+  if(_caricatoDaFile&&_DATI_INCORPORATI.ricetteCustom){
     ricetteCustom=_DATI_INCORPORATI.ricetteCustom; return;
   }
   try{var d=localStorage.getItem('liq_ricette_custom');if(d)ricetteCustom=JSON.parse(d);}catch(e){}
@@ -3602,9 +3735,17 @@ function ricalcolaCrema(ev){
 
 function confermaOverrideRicetta(){
   var tbl=document.getElementById('override-tbl');
-  if(!tbl) return;
+  if(!tbl) return true;
   var rows=tbl.querySelectorAll('.override-row');
-  if(!rows||!rows.length) return;
+  if(!rows||!rows.length) return true;
+  // Se una riga del form è cambiata mentre il pannello era aperto, i valori non valgono più
+  for(var rc0=0;rc0<rows.length;rc0++){
+    var fr0=_rigaDaRid(rows[rc0].dataset.rid);
+    if(!fr0||_firmaRiga(fr0)!==rows[rc0].dataset.firma){
+      alert('⚠ Hai cambiato prodotto, formato o quantità mentre il pannello ricetta era aperto.\nChiudi il pannello con ❌ Annulla e riaprilo per ricalcolare i valori.');
+      return false;
+    }
+  }
   _confermataOverride={};
   for(var ri=0;ri<rows.length;ri++){
     var row=rows[ri];
@@ -3694,6 +3835,7 @@ function toggleOverrideRicetta(){
       var tr=document.createElement('tr');
       tr.className='override-row';
       tr.dataset.rid=_ridRiga(p.row);
+      tr.dataset.firma=_firmaRiga(p.row); // i valori del pannello valgono per questa riga così com'è ora
       var ovEsistente=_overrideRiga(p.row);
       tr.dataset.nome=p.nome;
       tr.dataset.lt=String(lt);
@@ -3982,11 +4124,12 @@ function salvaLottoConOverride(ricettaOverride){
   if(isEdit&&idxOriginale<0){alert('La VIA in modifica non è più presente. Chiudi il modulo e riaprila.');return;}
 
   if(!via||isNaN(via)){alert('Indicare il numero VIA');return;}
+  var errD=erroreDataAnno(data,'della VIA'); if(errD){alert(errD);return;}
   if(!isEdit&&lotti.find(function(l){ return l.via==via; })){
     alert('VIA '+via+' è già presente nel registro.');return;
   }
   // Se il pannello ricetta è ancora aperto, i valori inseriti valgono come confermati
-  if(_overrideAttivo) confermaOverrideRicetta();
+  if(_overrideAttivo&&confermaOverrideRicetta()===false) return;
   var scaduti=_overrideScaduti();
   if(scaduti.length){
     alert('⚠ Hai cambiato prodotto, formato o quantità dopo aver modificato la ricetta di: '+scaduti.join(', ')+'.\nRiapri "Modifica ricetta" e conferma i valori aggiornati (oppure annullala) prima di salvare.');
@@ -4059,6 +4202,22 @@ function salvaLottoConOverride(ricettaOverride){
     if(segErr){erroreValidazione=segErr;break;}
   }
 
+  // In modifica: se si riducono bottiglie già vendute la giacenza andrebbe sotto zero
+  if(!erroreValidazione&&isEdit){
+    // giacenza qui = dopo lo storno della VIA originale
+    var nuovo={}, orig={};
+    prodotti.forEach(function(p){ var k=p.nome+'|'+p.fmt; nuovo[k]=(nuovo[k]||0)+p.qt; });
+    lottoOriginale.prodotti.forEach(function(p){ var k=p.nome+'|'+p.fmt; orig[k]=(orig[k]||0)+p.qt; });
+    var negativi=[];
+    Object.keys(Object.assign({},nuovo,orig)).forEach(function(k){
+      var nome=k.split('|')[0], fi=FMT.indexOf(parseFloat(k.split('|')[1]));
+      if(!giacenze[nome]||fi<0) return;
+      var base=giacenze[nome].qt[fi], prima=base+(orig[k]||0), dopo=base+(nuovo[k]||0);
+      // avvisa solo se la modifica porta (o peggiora) la giacenza sotto zero
+      if(dopo<0&&dopo<prima) negativi.push(dn(nome)+' '+FMT[fi]+'L ('+dopo+')');
+    });
+    if(negativi.length&&!confirm('⚠ Con questa modifica la giacenza diventa negativa per: '+negativi.join(', ')+'.\nProbabilmente quelle bottiglie sono già state vendute.\n\nSalvare comunque?')) erroreValidazione='Modifica non salvata.';
+  }
   if(erroreValidazione){
     if(isEdit){
       lotti.splice(idxOriginale,0,lottoOriginale);
@@ -4070,8 +4229,12 @@ function salvaLottoConOverride(ricettaOverride){
     return;
   }
 
-  // Applica il nuovo lotto
-  prodotti.forEach(function(p){if(giacenze[p.nome]){var fi=FMT.indexOf(p.fmt);if(fi>=0)giacenze[p.nome].qt[fi]+=p.qt;}});
+  // Applica il nuovo lotto (se il prodotto non ha ancora una giacenza nell'anno, la crea)
+  prodotti.forEach(function(p){
+    var fi=FMT.indexOf(p.fmt); if(fi<0) return;
+    if(!giacenze[p.nome]){ var rr=tutteRicette()[p.nome]; giacenze[p.nome]={grado:rr?rr.g:0,qt:FMT.map(function(){return 0;})}; }
+    giacenze[p.nome].qt[fi]+=p.qt;
+  });
   var nuovoLotto={
     via:via,
     data:data,
@@ -4090,6 +4253,9 @@ function eliminaLotto(i){
   if(!l) return;
   if(_editingViaRef){alert('Chiudi prima il modulo VIA aperto, poi elimina.');return;}
   if(!confirm('Eliminare VIA '+l.via+'? La giacenza e i contrassegni verranno stornati.'))return;
+  var neg=[];
+  l.prodotti.forEach(function(p){ var fi=FMT.indexOf(p.fmt); if(giacenze[p.nome]&&fi>=0&&giacenze[p.nome].qt[fi]-p.qt<0) neg.push(dn(p.nome)+' '+p.fmt+'L ('+(giacenze[p.nome].qt[fi]-p.qt)+')'); });
+  if(neg.length&&!confirm('⚠ Eliminando questa VIA la giacenza diventa negativa per: '+neg.join(', ')+'.\nQuelle bottiglie risultano già vendute.\n\nEliminare comunque?'))return;
   l.prodotti.forEach(function(p){if(giacenze[p.nome]){var idx=FMT.indexOf(p.fmt);if(idx>=0)giacenze[p.nome].qt[idx]-=p.qt;}});
   lotti.splice(i,1);salva();renderLotti();renderGiacenze();renderContrassegni();
 }
@@ -4175,6 +4341,7 @@ function salvaVendita(){
   var numFattura=nfEl?nfEl.value.trim():'';
   if(!clienteId||!cliente){alert('Selezionare un cliente dall\'anagrafica');return;}
   if(tipo==='Fattura'&&!numFattura){alert('Indicare il numero documento');return;}
+  var errD=erroreDataAnno(data,'della vendita'); if(errD){alert(errD);return;}
   var prodotti=raccogliProdottiVendita('vendita-prodotti');
   if(!prodotti.length){alert('Aggiungere almeno un prodotto');return;}
   // In modifica: storna temporaneamente la vendita originale prima del controllo
@@ -4326,6 +4493,8 @@ function addSerieCarico(fmtIdx,tipo,nome,da,a,existingUuid){
 
 function salvaCaricoContrassegni(){
   var data=document.getElementById('con-data').value;
+  if(!data){alert('Inserisci la data del carico contrassegni.');return;}
+  if(data.substring(0,4)>String(annoCorrente)){alert('La data del carico ('+data+') è in un anno successivo a quello aperto ('+annoCorrente+').');return;}
   var doc=document.getElementById('con-doc').value.trim();
   var note=document.getElementById('con-note').value.trim();
   var serie=[];
@@ -4383,7 +4552,7 @@ function mostraDisponibiliFormato(fi){
       var tot=s.a-s.da+1;
       var usati=utilizziPerSerie[sid]||0;
       var disp=tot-usati;
-      serie.push({nome:s.nome,tipo:s.tipo,da:s.da,a:s.a,tot:tot,usati:usati,disp:disp,data:c.data||'—'});
+      serie.push({sid:sid,nome:s.nome,tipo:s.tipo,da:s.da,a:s.a,tot:tot,usati:usati,disp:disp,data:c.data||'—'});
     });
   });
 
@@ -4419,21 +4588,13 @@ function mostraDisponibiliFormato(fi){
       var row=document.createElement('div');
       row.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #e8d8f8';
       var left=document.createElement('div');
-      left.innerHTML='<strong>'+escHtml(s.nome)+'</strong> <span style="color:#9c9890;font-size:11px">Tipo '+s.tipo+'</span>'+
+      left.innerHTML='<strong>'+escHtml(s.nome)+'</strong> <span style="color:#9c9890;font-size:11px">Tipo '+escHtml(s.tipo)+'</span>'+
         '<br><span style="font-family:monospace;font-size:11px;color:#6b6057">Da '+s.da+' a '+s.a+'</span>';
       var right=document.createElement('div');
       right.style.textAlign='right';
       var dispColor=s.disp<=0?'var(--rose)':s.disp<10?'var(--amber)':'var(--green)';
-      // Calcola i numeri di serie effettivamente disponibili
-      var numeriDisp=[];
-      var progressivo=s.da;
-      // Considera i segmenti già usati per questa serie
-      // (approssimazione: mostra range residui a partire dall'ultimo usato)
-      var usatiPerOrdine=s.tot-s.disp; // quanti usati
-      var primoDisp=s.da+usatiPerOrdine;
-      if(s.disp>0 && primoDisp<=s.a){
-        numeriDisp.push('da '+primoDisp+' a '+s.a);
-      }
+      // Numeri effettivamente liberi (tiene conto dei tratti usati anche non in ordine)
+      var numeriDisp=segmentiLiberi(s.sid,null).map(function(sg){ return sg.da===sg.a?('n. '+sg.da):('da '+sg.da+' a '+sg.a); });
       var numeriStr=numeriDisp.length?(' ('+numeriDisp.join(', ')+')') :'';
       right.innerHTML='<span style="font-size:18px;font-weight:700;color:'+dispColor+'">'+s.disp+'</span>'+
         '<br><span style="font-size:10px;color:#9c9890">di '+s.tot+' (usati '+s.usati+')</span>'+
@@ -4491,7 +4652,7 @@ function renderContrassegni(){
     var c=contrassegniCarichi[ci2];
     // Filtra per anno corrente
     var conAnnoC=c.data?c.data.substring(0,4):'';
-    if(conAnnoC&&conAnnoC!==annoCorrente) continue;
+    if(conAnnoC&&conAnnoC>annoCorrente) continue; // anni precedenti inclusi: i contrassegni si riportano
     var i2=ci2; // indice reale per eliminazione
     var serie=c.serie||[];
 
@@ -4797,7 +4958,7 @@ function rcCalcolaSerieAutomatiche(){
 function _rcChiave(r){ return r.serie+'|'+r.fmt+'|'+r.da+'|'+r.a; }
 
 function rcAggiornaGiacenza(){
-  var m = calcolaMagazzino();
+  var m = calcolaMagazzinoAl(document.getElementById('rc-data-giac') ? document.getElementById('rc-data-giac').value : '');
   // Litri anidri disponibili per contrassegni = Alcol ani + Creme ani + Aromi ani × 10%
   var anidriTot = m.gAlcA + m.gCreA + m.gAroA * 0.10;
 
@@ -4815,11 +4976,14 @@ function rcAggiornaGiacenza(){
   function _f(v){ return (v>=0?'+':'')+v.toFixed(3); }
   function _n(v){ return v.toFixed(3); }
 
+  var gp = _rcGiacenzePeriodo(gDal,gAl,gData);
+  var mI = gp.ini||m, mF = gp.fin||m;
+  var fuoriAnno = gData && gData.substring(0,4)!==String(annoCorrente) ? ' <span style="color:var(--rose);font-size:11px">⚠ data fuori dall\'anno aperto '+annoCorrente+'</span>' : '';
   var rows = '';
-  rows += '<tr><td style="font-weight:500">Giacenza al '+( gData||'—')+'</td>'+
-    '<td class="qty-num alc-t">'+_n(m.gAlcI)+'</td><td class="qty-num alc-t">'+_n(m.gAlcA)+'</td>'+
-    '<td class="qty-num cre-t">'+_n(m.gCreI)+'</td><td class="qty-num cre-t">'+_n(m.gCreA)+'</td>'+
-    '<td class="qty-num aro-t">'+_n(m.gAroI)+'</td><td class="qty-num aro-t">'+_n(m.gAroA)+'</td></tr>';
+  rows += '<tr><td style="font-weight:500">Giacenza al '+(gp.dataIni||gData||'—')+fuoriAnno+'</td>'+
+    '<td class="qty-num alc-t">'+_n(mI.gAlcI)+'</td><td class="qty-num alc-t">'+_n(mI.gAlcA)+'</td>'+
+    '<td class="qty-num cre-t">'+_n(mI.gCreI)+'</td><td class="qty-num cre-t">'+_n(mI.gCreA)+'</td>'+
+    '<td class="qty-num aro-t">'+_n(mI.gAroI)+'</td><td class="qty-num aro-t">'+_n(mI.gAroA)+'</td></tr>';
 
   rows += '<tr><td>+ Introdotto ('+( gDal||'...')+'→'+(gAl||'...')+')</td>'+
     '<td class="qty-num alc-t">'+_n(mPer.aqAlcI)+'</td><td class="qty-num alc-t">'+_n(mPer.aqAlcA)+'</td>'+
@@ -4836,10 +5000,10 @@ function rcAggiornaGiacenza(){
     '<td class="qty-num cre-t">'+_n(mPer.aqCreI-mPer.coCreI)+'</td><td class="qty-num cre-t">'+_n(mPer.aqCreA-mPer.coCreA)+'</td>'+
     '<td class="qty-num aro-t">'+_n(mPer.aqAroI-mPer.coAroI)+'</td><td class="qty-num aro-t">'+_n(mPer.aqAroA-mPer.coAroA)+'</td></tr>';
 
-  rows += '<tr style="background:#fdf8ee"><td style="font-weight:600">Giacenza al (fine periodo)</td>'+
-    '<td class="qty-num alc-t" style="font-weight:600">'+_n(m.gAlcI)+'</td><td class="qty-num alc-t" style="font-weight:600">'+_n(m.gAlcA)+'</td>'+
-    '<td class="qty-num cre-t" style="font-weight:600">'+_n(m.gCreI)+'</td><td class="qty-num cre-t" style="font-weight:600">'+_n(m.gCreA)+'</td>'+
-    '<td class="qty-num aro-t" style="font-weight:600">'+_n(m.gAroI)+'</td><td class="qty-num aro-t" style="font-weight:600">'+_n(m.gAroA)+'</td></tr>';
+  rows += '<tr style="background:#fdf8ee"><td style="font-weight:600">Giacenza al '+(gp.dataFin||'(fine periodo)')+'</td>'+
+    '<td class="qty-num alc-t" style="font-weight:600">'+_n(mF.gAlcI)+'</td><td class="qty-num alc-t" style="font-weight:600">'+_n(mF.gAlcA)+'</td>'+
+    '<td class="qty-num cre-t" style="font-weight:600">'+_n(mF.gCreI)+'</td><td class="qty-num cre-t" style="font-weight:600">'+_n(mF.gCreA)+'</td>'+
+    '<td class="qty-num aro-t" style="font-weight:600">'+_n(mF.gAroI)+'</td><td class="qty-num aro-t" style="font-weight:600">'+_n(mF.gAroA)+'</td></tr>';
 
   tb.innerHTML = rows;
 
@@ -4880,7 +5044,8 @@ function rcCalcolaImporto(){
   var totQt=0, totAni=0, totImp=0;
   for(var i=0;i<RC_FMT.length;i++){
     var inp = document.querySelector('input.rc-qt[data-fi="'+i+'"]');
-    var qt = inp ? (parseInt(inp.value)||0) : 0;
+    var qt = inp ? Math.max(0,parseInt(inp.value)||0) : 0;
+    if(inp && (parseInt(inp.value)||0)<0) inp.value='0';
     var ani = qt * RC_FMT[i] * RC_COEFF;
     var imp = qt * costo;
     totQt  += qt;
@@ -5056,7 +5221,7 @@ function rcGetDati(){
   var gDal  = document.getElementById('rc-periodo-da') ? document.getElementById('rc-periodo-da').value : '';
   var gAl   = document.getElementById('rc-periodo-a')  ? document.getElementById('rc-periodo-a').value  : '';
   var costo = parseFloat(document.getElementById('rc-costo') ? document.getElementById('rc-costo').value : RC_COSTO) || RC_COSTO;
-  var m     = calcolaMagazzino();
+  var m     = calcolaMagazzinoAl(gData); // giacenza alla data indicata nel documento
   var mPer  = calcolaMagazzinoFiltrato(gDal, gAl);
   var anidriDisp = m.gAlcA + m.gCreA + m.gAroA * 0.10;
 
@@ -5064,13 +5229,14 @@ function rcGetDati(){
   var totQt=0, totAni=0, totImp=0;
   for(var i=0;i<RC_FMT.length;i++){
     var inp = document.querySelector('input.rc-qt[data-fi="'+i+'"]');
-    var qt  = inp ? (parseInt(inp.value)||0) : 0;
+    var qt  = inp ? Math.max(0,parseInt(inp.value)||0) : 0;
     var ani = qt * RC_FMT[i] * RC_COEFF;
     var imp = qt * costo;
     qtArr.push(qt); aniArr.push(ani); impArr.push(imp);
     totQt+=qt; totAni+=ani; totImp+=imp;
   }
-  return {gData:gData,gDal:gDal,gAl:gAl,costo:costo,m:m,mPer:mPer,
+  var gp = _rcGiacenzePeriodo(gDal,gAl,gData);
+  return {gData:gData,gDal:gDal,gAl:gAl,costo:costo,m:m,mPer:mPer,mIni:gp.ini||m,mFin:gp.fin||m,dataIni:gp.dataIni||gData,dataFin:gp.dataFin||gData,
     anidriDisp:anidriDisp,qtArr:qtArr,aniArr:aniArr,impArr:impArr,
     totQt:totQt,totAni:totAni,totImp:totImp};
 }
@@ -5169,29 +5335,20 @@ function rcStampaPDF(){
   H += '<tr><td class="lbl">SERIE</td>';
   for(var fi3=0;fi3<RC_FMT.length;fi3++){
     var fk3=String(RC_FMT[fi3]);
-    var nomi=(seriePerFmt[fk3]||[]).join(', ');
-    H += '<td>'+esc(nomi||'')+'</td>';
+    // una riga per serie/tratto, allineata con le righe DA e A
+    H += '<td>'+(seriePerFmt[fk3]||[]).map(esc).join('<br>')+'</td>';
   }
   H += '</tr>';
-  // righe DA / A per ogni formato (prima serie trovata)
+  // righe DA / A: TUTTE le serie/tratti del formato (prima solo la prima)
+  function _valoriFmt(fk,campo){
+    var out=[];
+    for(var sx=0;sx<RC_SERIE.length;sx++){ if(String(RC_SERIE[sx].fmt||'')==fk) out.push(esc(RC_SERIE[sx][campo]==null?'':RC_SERIE[sx][campo])); }
+    return out.join('<br>');
+  }
   H += '<tr><td class="lbl">DA</td>';
-  for(var fi4=0;fi4<RC_FMT.length;fi4++){
-    var fk4=String(RC_FMT[fi4]);
-    var daVal=''; var aVal='';
-    for(var si2=0;si2<RC_SERIE.length;si2++){
-      if(String(RC_SERIE[si2].fmt||'')==fk4){ daVal=RC_SERIE[si2].da||''; aVal=RC_SERIE[si2].a||''; break; }
-    }
-    H += '<td>'+esc(daVal)+'</td>';
-  }
+  for(var fi4=0;fi4<RC_FMT.length;fi4++) H += '<td>'+_valoriFmt(String(RC_FMT[fi4]),'da')+'</td>';
   H += '</tr><tr><td class="lbl">A</td>';
-  for(var fi5=0;fi5<RC_FMT.length;fi5++){
-    var fk5=String(RC_FMT[fi5]);
-    var aVal2='';
-    for(var si3=0;si3<RC_SERIE.length;si3++){
-      if(String(RC_SERIE[si3].fmt||'')==fk5){ aVal2=RC_SERIE[si3].a||''; break; }
-    }
-    H += '<td>'+esc(aVal2)+'</td>';
-  }
+  for(var fi5=0;fi5<RC_FMT.length;fi5++) H += '<td>'+_valoriFmt(String(RC_FMT[fi5]),'a')+'</td>';
   H += '</tr>';
   // Lt idrici / anidri per formato
   var ltIdrFmt={}, ltAniFmt={};
@@ -5217,11 +5374,11 @@ function rcStampaPDF(){
   function gRow(lbl,ai,aa,ci,ca,ri,ra){
     H+='<tr><td class="lbl">'+esc(lbl)+'</td><td>'+_n3(ai)+'</td><td>'+_n3(aa)+'</td><td>'+_n3(ci)+'</td><td>'+_n3(ca)+'</td><td>'+_n3(ri)+'</td><td>'+_n3(ra)+'</td></tr>';
   }
-  gRow('Giacenza al '+esc(d.gData||'—'), m.gAlcI,m.gAlcA, m.gCreI,m.gCreA, m.gAroI,m.gAroA);
+  gRow('Giacenza al '+esc(d.dataIni||'—'), d.mIni.gAlcI,d.mIni.gAlcA, d.mIni.gCreI,d.mIni.gCreA, d.mIni.gAroI,d.mIni.gAroA);
   gRow('Introdotto al '+esc(d.gDal||'...')+'/'+esc(d.gAl||'...'), mPer.aqAlcI,mPer.aqAlcA, mPer.aqCreI,mPer.aqCreA, mPer.aqAroI,mPer.aqAroA);
   gRow('Impiegato al '+esc(d.gDal||'...')+'/'+esc(d.gAl||'...'), mPer.coAlcI,mPer.coAlcA, mPer.coCreI,mPer.coCreA, mPer.coAroI,mPer.coAroA);
   gRow('Totale carico', mPer.aqAlcI-mPer.coAlcI,mPer.aqAlcA-mPer.coAlcA, mPer.aqCreI-mPer.coCreI,mPer.aqCreA-mPer.coCreA, mPer.aqAroI-mPer.coAroI,mPer.aqAroA-mPer.coAroA);
-  gRow('Giacenza al '+esc(d.gData||'—'), m.gAlcI,m.gAlcA, m.gCreI,m.gCreA, m.gAroI,m.gAroA);
+  gRow('Giacenza al '+esc(d.dataFin||'—'), d.mFin.gAlcI,d.mFin.gAlcA, d.mFin.gCreI,d.mFin.gCreA, d.mFin.gAroI,d.mFin.gAroA);
   H += '</tbody></table>';
 
   // Firma
@@ -5457,8 +5614,12 @@ function salvaCarico(){
   var tipo=document.getElementById('c-tipo').value;
   var idr=parseFloat(document.getElementById('c-idr')?document.getElementById('c-idr').value:0)||0;
   var ani=parseFloat(document.getElementById('c-ani')?document.getElementById('c-ani').value:0)||0;
+  if(tipo==='creme') ani=idr*0.17; // creme a 17°: anidri calcolati, non digitati
   if(!fornitoreId||!fornitore){alert('Selezionare un fornitore dall\'anagrafica');return;}
   if(idr<=0){alert('Inserisci i litri idrati');return;}
+  var errD=erroreDataAnno(data,'del carico'); if(errD){alert(errD);return;}
+  if(ani<=0){alert('Inserisci i litri anidri (dal DDT).');return;}
+  if(ani>idr){alert('I litri anidri non possono superare i litri idrati. Controlla i valori del DDT.');return;}
   var coeff=idr>0?(ani/idr).toFixed(4):0;
   carichi.push({fornitoreId:fornitoreId,fornitore:fornitore,data:data,ddt:ddt,tipo:tipo,idr:idr,ani:parseFloat(ani.toFixed(3)),coeff:parseFloat(coeff)});
   closeCarico();salva();renderCarichi();
@@ -5582,6 +5743,24 @@ function calcolaMagazzino(){
   return{aqAlcI:aqAlcI,aqAlcA:aqAlcA,aqAroI:aqAroI,aqAroA:aqAroA,aqCreI:aqCreI,aqCreA:aqCreA,coAlcI:coAlcI,coAlcA:coAlcA,coAroI:coAroI,coAroA:coAroA,coCreI:coCreI,coCreA:coCreA,gAlcI:gAlcI,gAlcA:gAlcA,gAroI:gAroI,gAroA:gAroA,gCreI:gCreI,gCreA:gCreA};
 }
 
+function _giornoPrima(d){ var x=new Date(d+'T12:00:00'); x.setDate(x.getDate()-1); return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0'); }
+// Giacenza iniziale e finale del periodo della Richiesta: così le righe del documento
+// tornano (iniziale + introdotto − impiegato = finale)
+function _rcGiacenzePeriodo(gDal,gAl,gData){
+  var dIni=gDal?_giornoPrima(gDal):(parseInt(annoCorrente)-1)+'-12-31'; // senza "dal": inizio anno
+  var ini=calcolaMagazzinoAl(dIni);
+  var fin=gAl?calcolaMagazzinoAl(gAl):calcolaMagazzino(); // stesso intervallo dei movimenti del periodo
+  return {ini:ini,fin:fin,dataIni:dIni,dataFin:gAl||gData||''};
+}
+// Giacenza materie prime alla data indicata (inclusa), anno aperto. Senza data = oggi.
+function calcolaMagazzinoAl(data){
+  if(!data) return calcolaMagazzino();
+  var m=calcolaMagazzinoFiltrato('',data);
+  // calcolaMagazzinoFiltrato con filtro azzera la giacenza iniziale: la riaggiungiamo
+  var gi={AlcI:GI_ALCOL.idr,AlcA:GI_ALCOL.ani,AroI:GI_AROMI.idr,AroA:GI_AROMI.ani,CreI:GI_CREME.idr,CreA:GI_CREME.ani};
+  Object.keys(gi).forEach(function(k){ m['g'+k]+=gi[k]; });
+  return m;
+}
 function calcolaMagazzinoFiltrato(dal,al){
   var aqAlcI=0,aqAlcA=0,aqAroI=0,aqAroA=0,aqCreI=0,aqCreA=0;
   carichi.forEach(function(c){
@@ -5661,9 +5840,9 @@ function renderMagazzino(){
   function colorGiac(v){return v<0?'color:var(--rose)':'color:#1a5c42';}
 
   var mHtml='';
-  if(showAlc) mHtml+='<div class="metric alc-bg"><div class="metric-label alc-t">Alcol — '+(m.hasFiltro?'acquistato idr.':'giacenza idr.')+'</div><div class="metric-value" style="'+colorGiac(m.gAlcI)+'">'+(m.hasFiltro?m.aqAlcI:m.gAlcI).toFixed(3)+' L</div><div class="metric-sub alc-t">Consumato: '+m.coAlcI.toFixed(3)+' L</div></div>';
-  if(showAro) mHtml+='<div class="metric aro-bg"><div class="metric-label aro-t">Aromi — '+(m.hasFiltro?'acquistato idr.':'giacenza idr.')+'</div><div class="metric-value" style="'+colorGiac(m.gAroI)+'">'+(m.hasFiltro?m.aqAroI:m.gAroI).toFixed(3)+' L</div><div class="metric-sub aro-t">Consumato: '+m.coAroI.toFixed(3)+' L</div></div>';
-  if(showCre) mHtml+='<div class="metric" style="background:#fdf0f4;border-color:#e8b0c0"><div class="metric-label cre-t">Creme — '+(m.hasFiltro?'acquistato idr.':'giacenza idr.')+'</div><div class="metric-value" style="'+colorGiac(m.gCreI)+'">'+(m.hasFiltro?m.aqCreI:m.gCreI).toFixed(3)+' L</div><div class="metric-sub cre-t">Consumato: '+m.coCreI.toFixed(3)+' L</div></div>';
+  if(showAlc) mHtml+='<div class="metric alc-bg"><div class="metric-label alc-t">Alcol — '+(m.hasFiltro?'acquistato idr.':'giacenza idr.')+'</div><div class="metric-value" style="'+colorGiac(m.hasFiltro?m.aqAlcI:m.gAlcI)+'">'+(m.hasFiltro?m.aqAlcI:m.gAlcI).toFixed(3)+' L</div><div class="metric-sub alc-t">Consumato: '+m.coAlcI.toFixed(3)+' L</div></div>';
+  if(showAro) mHtml+='<div class="metric aro-bg"><div class="metric-label aro-t">Aromi — '+(m.hasFiltro?'acquistato idr.':'giacenza idr.')+'</div><div class="metric-value" style="'+colorGiac(m.hasFiltro?m.aqAroI:m.gAroI)+'">'+(m.hasFiltro?m.aqAroI:m.gAroI).toFixed(3)+' L</div><div class="metric-sub aro-t">Consumato: '+m.coAroI.toFixed(3)+' L</div></div>';
+  if(showCre) mHtml+='<div class="metric" style="background:#fdf0f4;border-color:#e8b0c0"><div class="metric-label cre-t">Creme — '+(m.hasFiltro?'acquistato idr.':'giacenza idr.')+'</div><div class="metric-value" style="'+colorGiac(m.hasFiltro?m.aqCreI:m.gCreI)+'">'+(m.hasFiltro?m.aqCreI:m.gCreI).toFixed(3)+' L</div><div class="metric-sub cre-t">Consumato: '+m.coCreI.toFixed(3)+' L</div></div>';
   document.getElementById('mag-metrics').innerHTML=mHtml;
 
   function righe(giI,giA,aqI,aqA,coI,coA,gI,gA,cls,hasFiltro){
@@ -5764,6 +5943,7 @@ function chiudiEsercizio(){
     var nMov=lotti.filter(function(l){return inAnno(l.data);}).length+
       vendite.filter(function(v){return inAnno(v.data);}).length+
       scontriniGruppi.filter(function(s){return inAnno(s.dataDa);}).length;
+    _chiudiModuliAperti();
     if(nMov>0&&!confirm('⚠️ ATTENZIONE: ci sono già '+nMov+' movimenti (VIA, vendite o scontrini) datati '+annoNuovo+'.\n\nChiudendo ora, le giacenze del '+annoNuovo+' verranno sostituite con quelle finali del '+annoChiusura+' e l\'effetto di quei movimenti sulle giacenze andrà perso: dovrai ricontrollarle a mano.\n\nProcedere comunque?')) return;
 
     // Salva le giacenze finali come giacenze iniziali del nuovo anno
@@ -5787,8 +5967,15 @@ function chiudiEsercizio(){
 }
 
 // Cambia anno visualizzato (senza chiudere l'esercizio)
+// Chiude i moduli aperti (le modifiche non salvate vengono scartate, senza effetti sulle giacenze)
+function _chiudiModuliAperti(){
+  try{ if(document.getElementById('lotto-form').style.display!=='none') closeLotto(); }catch(e){}
+  try{ if(document.getElementById('vendita-form').style.display!=='none') closeVendita(); }catch(e){}
+  try{ if(_editingScIdx!==null) closeGruppoScontrini(); }catch(e){}
+}
 function cambiaAnno(anno){
   if(!anno) return;
+  _chiudiModuliAperti();
   annoCorrente=anno;
   if(!giacenzePerAnno[annoCorrente]) giacenzePerAnno[annoCorrente]={};
   aggiornaAliasAnno();
@@ -5914,7 +6101,10 @@ function salvaAnag(){
 
 function eliminaAnag(){
   if(!_editingAnagId) return;
-  if(!confirm('Eliminare questa anagrafica?')) return;
+  var idA=_editingAnagId;
+  var nUso=vendite.filter(function(v){return v.clienteId===idA;}).length+carichi.filter(function(c){return c.fornitoreId===idA;}).length;
+  if(nUso&&!confirm('Questa anagrafica è usata in '+nUso+' tra vendite e carichi.\nI movimenti resteranno con il nome registrato, ma non saranno più collegati alla scheda.\n\nEliminarla comunque?')) return;
+  if(!nUso&&!confirm('Eliminare questa anagrafica?')) return;
   anagrafica=anagrafica.filter(function(x){return x.id!==_editingAnagId;});
   closeAnag();
   salva();
@@ -6165,6 +6355,9 @@ function raccogliProdottiScontrino(){
 function salvaGruppoScontrini(){
   var periodo=document.getElementById('sc-periodo').value.trim();
   if(!periodo){alert('Inserisci il periodo / descrizione');return;}
+  var scDa=document.getElementById('sc-data-da').value, scA=document.getElementById('sc-data-a').value;
+  var errD=erroreDataAnno(scDa,'di inizio'); if(errD){alert(errD);return;}
+  if(scA){ errD=erroreDataAnno(scA,'di fine'); if(errD){alert(errD);return;} if(scA<scDa){alert('La data di fine è prima della data di inizio.');return;} }
   var prodotti=raccogliProdottiScontrino();
   if(!prodotti.length){alert('Aggiungere almeno un prodotto');return;}
   // Storna prima le giacenze della vecchia versione (se modifica), poi verifica disponibilità
@@ -6304,11 +6497,11 @@ function renderHome(){
   var venditeAnno=vendite.filter(function(v){var a=v.data?v.data.substring(0,4):''; return !a||a===annoCorrente;});
   var conCarichiAnno=contrassegniCarichi.filter(function(c){var a=c.data?c.data.substring(0,4):''; return !a||a===annoCorrente;});
 
-  // Totale contrassegni caricati (non disponibili, totali) — solo anno corrente
+  // Totale contrassegni caricati fino all'anno aperto (coerente con i disponibili, che si riportano)
   var totConCaricati=0;
   contrassegniCarichi.forEach(function(c){
     var cAnno=c.data?c.data.substring(0,4):'';
-    if(cAnno&&cAnno!==annoCorrente) return;
+    if(cAnno&&cAnno>annoCorrente) return;
     (c.serie||[]).forEach(function(s){totConCaricati+=s.a-s.da+1;});
   });
 
@@ -6393,7 +6586,7 @@ function supportaFileSystemAPI(){
 // Genera l'HTML aggiornato con i dati incorporati
 function generaHtmlAggiornato(){
   giacenzePerAnno[annoCorrente]=giacenze; // sincronizza alias
-  var dati={annoCorrente:annoCorrente,giacenzePerAnno:giacenzePerAnno,
+  var dati={salvatoIl:new Date().toISOString(),annoCorrente:annoCorrente,giacenzePerAnno:giacenzePerAnno,
     giacenzeAlcolPerAnno:giacenzeAlcolPerAnno,
     lotti:lotti,vendite:vendite,
     carichi:carichi,contrassegniCarichi:contrassegniCarichi,ricetteCustom:ricetteCustom,
@@ -6692,7 +6885,7 @@ function sincronizzaGist(){
 function caricaDaGist(callback){
   var c=gistConf();
   if(!c.id||!c.token){ if(callback) callback(false); return; }
-  if(_syncPendente()&&_DATI_INCORPORATI){
+  if(_syncPendente()&&_caricatoDaFile){
     // Dati caricati da un file salvato (potrebbe essere una copia vecchia):
     // non si sovrascrive il Gist in automatico, decide l'utente.
     if(callback) callback(false,'dati aperti da file: per inviarli al Gist usa "Sincronizza Gist" dal menu ⋯');
@@ -6701,12 +6894,12 @@ function caricaDaGist(callback){
   if(_syncPendente()){
     // Su questo dispositivo ci sono modifiche non ancora arrivate al Gist:
     // il Gist è più vecchio, quindi si inviano i dati locali invece di scaricare.
-    _inviaGist(function(ok,err){
-      if(callback) callback(ok, ok?null:('modifiche locali non ancora inviate — '+err), ok?'↑ Modifiche locali inviate al Gist':null);
+    _inviaGist(function(ok,err,msgOk){
+      if(callback) callback(ok, ok?null:('modifiche locali non ancora inviate — '+err), ok?(msgOk||'↑ Modifiche locali inviate al Gist'):null);
     });
     return;
   }
-  var url='https://api.github.com/gists/'+c.id;
+  var url='https://api.github.com/gists/'+c.id+'?t='+Date.now();
   var xhr=new XMLHttpRequest();
   xhr.open('GET',url);
   xhr.setRequestHeader('Authorization','token '+c.token);
@@ -6718,6 +6911,7 @@ function caricaDaGist(callback){
         var f=gist.files[c.file];
         if(!f){ if(callback) callback(false,'File "'+c.file+'" non trovato nel Gist.'); return; }
         var content=f.content||'';
+        if(!content.trim()){ if(callback) callback(true,null,'Gist ancora vuoto: verrà riempito al primo salvataggio'); return; }
         // Se troncato (> 1MB GitHub tronca), usa raw_url
         if(f.truncated){
           var xhr2=new XMLHttpRequest();
@@ -6742,9 +6936,20 @@ function caricaDaGist(callback){
 function applicaDatiGist(d){
   // Se nel frattempo sono state fatte modifiche locali, non sovrascriverle
   if(_syncPendente()){ _inviaGist(); return; }
+  // Primo collegamento di questo dispositivo al Gist con dati già presenti qui: si chiede
+  var haDatiLocali=lotti.length||vendite.length||anagrafica.length||carichi.length||contrassegniCarichi.length||scontriniGruppi.length;
+  if(!_gistUltimo()&&haDatiLocali){
+    if(!confirm('Primo collegamento di questo dispositivo al Gist.\n\nOK = usa i dati del Gist (i dati di questo dispositivo vengono salvati come copia di sicurezza)\nAnnulla = tieni i dati di questo dispositivo e inviali al Gist')){
+      _setSyncPendente(true); _inviaGist(function(ok,err){ _mostraStatoSync(ok,ok?'↑ Dati di questo dispositivo inviati al Gist':'⚠ Gist non sincronizzato — '+err); });
+      return;
+    }
+    try{ localStorage.setItem('liq_backup_prima_del_gist',JSON.stringify(raccogliDatiExport())); }catch(e){}
+    try{ esportaDati(); }catch(e){}
+  }
   _applicaDati(d);
   _dopoCaricamento();
   salva(true);
+  if(d&&d.esportato) _setGistUltimo(d.esportato);
   renderAll();
 }
 
@@ -6763,6 +6968,12 @@ initGiacenze();
 carica();
 _dopoCaricamento();
 iniziaLogin();
+// Movimenti vecchi senza data: vengono contati in ogni anno, meglio completarli
+setTimeout(function(){
+  var n=lotti.filter(function(l){return !l.data;}).length+vendite.filter(function(v){return !v.data;}).length+
+    scontriniGruppi.filter(function(s){return !s.dataDa;}).length+carichi.filter(function(c){return !c.data;}).length;
+  if(n) _mostraStatoSync(false,'⚠ '+n+' movimenti senza data (VIA, vendite, scontrini o carichi materie prime): vengono contati in ogni anno. Apri VIA/vendite/scontrini con Modifica e aggiungi la data; i carichi vanno eliminati e reinseriti con la data.');
+},6000);
 renderAll();
 aggiornaCampiCarico();
 // Dopo il caricamento, azzera il contatore (nessuna modifica in sospeso)
